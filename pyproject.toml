@@ -60,11 +60,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "bittensor[cli]",
     "pip-tools",
     "pre-commit",
     "pytest",
     "pytest-cov",
+    "allure-pytest"
 ]
 
 [project.urls]
