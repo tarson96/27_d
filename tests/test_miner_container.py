@@ -1,8 +1,5 @@
-import os
-import json
 import base64
 import pytest
-import subprocess
 from unittest.mock import MagicMock, patch, mock_open
 
 from neurons.Miner.container import (
@@ -10,8 +7,6 @@ from neurons.Miner.container import (
     check_container,
     pause_container,
     unpause_container,
-    container_name,
-    container_name_test,
     get_docker,
     kill_container,
     set_docker_base_size
