@@ -44,7 +44,7 @@ base58==2.1.1
     # via scalecodec
 bcrypt==4.3.0
     # via paramiko
-bittensor==9.0.0
+bittensor[cli]==9.0.0
     # via NI-Compute (pyproject.toml)
 bittensor-cli==9.1.0
     # via bittensor

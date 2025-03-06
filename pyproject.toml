@@ -60,6 +60,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "bittensor[cli]",
     "pip-tools",
     "pre-commit",
     "pytest",
