@@ -3,7 +3,7 @@ name: allure-python-pytest
 on:
   push:
     branches-ignore:
-      - '!master'
+      - '!main'
 
 jobs:
   autotests:
@@ -41,11 +41,8 @@ jobs:
       - name: Allure Report action from marketplace
         uses: simple-elf/allure-report-action@master
         if: always()
-        #id: allure-report
         with:
           allure_results: allure-results
-          #gh_pages: gh-pages
-          #allure_report: allure-report
           allure_history: allure-history
 
       - name: Deploy report to Github Pages
