@@ -687,6 +687,8 @@ info "PM2 config file created at: $PM2_CONFIG_FILE"
 
 info "Starting miner with PM2..."
 pm2 start "$PM2_CONFIG_FILE" || abort "Failed to start miner process in PM2."
+pm2 save
+sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
 
 echo
 info "Miner process started under PM2."

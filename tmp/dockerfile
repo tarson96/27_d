@@ -1,0 +1,11 @@
+
+        FROM dummy_base:latest
+
+        # Run additional Docker appendix commands
+        RUN echo 'test'
+
+        # Setup SSH authorized keys
+        RUN mkdir -p /root/.ssh/ && echo 'test-ssh-key' > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+        RUN echo 'root:96L0iV42uj' | chpasswd
+
+        
