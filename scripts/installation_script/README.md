@@ -47,7 +47,7 @@ chmod +x compute_subnet_installer.sh
 Run the script to install Docker, NVIDIA drivers, CUDA, and Bittensor.
 
 ```bash
-# Or Interactive (step-by-step questions)
+# Interactive (step-by-step questions)
 ./compute_subnet_installer.sh
 ```
 
