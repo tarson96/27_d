@@ -687,12 +687,30 @@ info "PM2 config file created at: $PM2_CONFIG_FILE"
 
 info "Starting miner with PM2..."
 pm2 start "$PM2_CONFIG_FILE" || abort "Failed to start miner process in PM2."
-pm2 save
-sudo env PATH=$PATH:/usr/bin /usr/local/lib/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
 
 echo
 info "Miner process started under PM2."
 echo "Use 'pm2 logs subnet${NETUID}_miner' to see logs, or check ${CS_PATH}/pm2_out.log / pm2_error.log."
+if $AUTOMATED; then
+  pm2 save
+  sudo env PATH=$PATH:/usr/bin /usr/local/lib/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
+  else
+    echo "To ensure that your miner automatically restarts after a system reboot,"
+    echo "we will configure PM2 to save the current process list and resurrect it upon system start."
+    echo "Would you like to enable this feature?(Yes/No)"
+    select yn in "Yes" "No"; do
+      case $yn in
+        Yes )
+          pm2 save
+          sudo env PATH=$PATH:/usr/bin /usr/local/lib/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
+          break
+          ;;
+        No )
+          break
+          ;;
+      esac
+    done
+  fi
 echo
 echo "NOTE: If you have not yet created and funded a wallet (coldkey/hotkey),"
 echo "the miner will fail to serve until you do so and specify those keys."
