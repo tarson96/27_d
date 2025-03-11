@@ -693,7 +693,8 @@ info "Miner process started under PM2."
 echo "Use 'pm2 logs subnet${NETUID}_miner' to see logs, or check ${CS_PATH}/pm2_out.log / pm2_error.log."
 if $AUTOMATED; then
   pm2 save
-  sudo env PATH=$PATH:/usr/bin /usr/local/lib/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
+  PM2_PATH=$(which pm2)
+  sudo env PATH=$PATH:/usr/bin $PM2_PATH startup systemd -u $USER --hp /home/$USER
 else
   echo "To ensure that your miner automatically restarts after a system reboot,"
   echo "It will configure PM2 to save the current process list and resurrect it upon system start."
@@ -702,7 +703,8 @@ else
     case $yn in
       Yes )
         pm2 save
-        sudo env PATH=$PATH:/usr/bin /usr/local/lib/node_modules/pm2/bin/pm2 startup systemd -u $USER --hp /home/$USER
+        PM2_PATH=$(which pm2)
+        sudo env PATH=$PATH:/usr/bin $PM2_PATH startup systemd -u $USER --hp /home/$USER
         break
         ;;
       No )
