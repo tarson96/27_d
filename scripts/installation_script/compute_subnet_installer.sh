@@ -617,6 +617,20 @@ ask_user_for_wandb() {
   read -rp "Enter your WANDB_API_KEY (leave blank if none): " WANDB_API_KEY
 }
 
+check_existing_wandb_key() {
+  if grep -q "^WANDB_API_KEY=" "$env_path"; then
+    read -rp "WANDB_API_KEY already exists in .env. Do you want to update it? (y/n): " update_choice
+    if [[ "$update_choice" == "y" ]]; then
+      ask_user_for_wandb
+    else
+      # If the user chooses not to update, do not modify WANDB_API_KEY
+      WANDB_API_KEY=""
+    fi
+  else
+    ask_user_for_wandb
+  fi
+}
+
 inject_wandb_env() {
   local env_example="${CS_PATH}/.env.example"
   local env_path="${CS_PATH}/.env"
@@ -641,7 +655,8 @@ inject_wandb_env() {
 if $AUTOMATED; then
   WANDB_API_KEY="${WANDB_KEY:-}"
 else
-  ask_user_for_wandb
+  env_path="${CS_PATH}/.env"
+  check_existing_wandb_key
 fi
 
 inject_wandb_env
