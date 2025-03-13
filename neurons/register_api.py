@@ -41,6 +41,7 @@ import threading
 import time
 import asyncio
 import random
+import hmac
 from concurrent.futures import ThreadPoolExecutor
 
 from neurons.Validator.database.pog import get_pog_specs
@@ -2955,7 +2956,6 @@ class RegisterAPI:
                 "uuid": uuid,
             }
             notify_url = self.status_notify_url
-
         retries = 0
         while retries < MAX_NOTIFY_RETRY:
             try:
