@@ -42,6 +42,7 @@ import time
 import asyncio
 import random
 import hmac
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from neurons.Validator.database.pog import get_pog_specs
@@ -370,7 +371,7 @@ class RegisterAPI:
         @self.app.on_event("shutdown")
         async def shutdown_event():
             """
-            This function is called when the application stops. <br>
+            This function is called when the appRemove unnecessary blank line in notify_url assignmentlication stops. <br>
             """
             pass
 
@@ -2961,6 +2962,8 @@ class RegisterAPI:
             try:
                 # Send the POST request
                 data = json.dumps(msg)
+                signature = hmac.new(self.webhooks_secret, data.encode(), hashlib.sha256).hexdigest()
+                headers["x-webhook-signature"] = signature
                 response = await run_in_threadpool(
                     requests.post, notify_url, headers=headers, data=data, timeout=3, json=True, verify=False,
                     cert=("cert/server.cer", "cert/server.key"),
