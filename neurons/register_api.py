@@ -325,7 +325,7 @@ class RegisterAPI:
         self.notify_retry_table = []
         self.deallocation_notify_url = os.getenv("DEALLOCATION_NOTIFY_URL")
         self.status_notify_url = os.getenv("STATUS_NOTIFY_URL")
-
+        self.webhooks_secret = os.getenv("WEBHOOKS_SECRET")
         # Initialize a global lock for allocation
         self.allocation_lock = threading.Lock()
         # Optional: Initialize per-hotkey locks if necessary
