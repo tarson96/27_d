@@ -2962,7 +2962,7 @@ class RegisterAPI:
             try:
                 # Send the POST request
                 data = json.dumps(msg)
-                signature = hmac.new(self.webhooks_secret, data.encode(), hashlib.sha256).hexdigest()
+                signature = hmac.new(self.webhooks_secret.encode(), data.encode(), hashlib.sha256).hexdigest()
                 headers["x-webhook-signature"] = signature
                 response = await run_in_threadpool(
                     requests.post, notify_url, headers=headers, data=data, timeout=3, json=True, verify=False,
