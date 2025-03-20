@@ -41,6 +41,8 @@ import threading
 import time
 import asyncio
 import random
+import hmac
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from neurons.Validator.database.pog import get_pog_specs
@@ -325,7 +327,7 @@ class RegisterAPI:
         self.notify_retry_table = []
         self.deallocation_notify_url = os.getenv("DEALLOCATION_NOTIFY_URL")
         self.status_notify_url = os.getenv("STATUS_NOTIFY_URL")
-
+        self.webhooks_secret = os.getenv("WEBHOOKS_SECRET")
         # Initialize a global lock for allocation
         self.allocation_lock = threading.Lock()
         # Optional: Initialize per-hotkey locks if necessary
@@ -369,7 +371,7 @@ class RegisterAPI:
         @self.app.on_event("shutdown")
         async def shutdown_event():
             """
-            This function is called when the application stops. <br>
+            This function is called when the appRemove unnecessary blank line in notify_url assignmentlication stops. <br>
             """
             pass
 
@@ -2955,12 +2957,13 @@ class RegisterAPI:
                 "uuid": uuid,
             }
             notify_url = self.status_notify_url
-
         retries = 0
         while retries < MAX_NOTIFY_RETRY:
             try:
                 # Send the POST request
                 data = json.dumps(msg)
+                signature = hmac.new(self.webhooks_secret.encode(), data.encode(), hashlib.sha256).hexdigest()
+                headers["x-webhook-signature"] = signature
                 response = await run_in_threadpool(
                     requests.post, notify_url, headers=headers, data=data, timeout=3, json=True, verify=False,
                     cert=("cert/server.cer", "cert/server.key"),
