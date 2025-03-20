@@ -18,16 +18,16 @@
 import string
 
 # Define the version of the template module.
-__version__ = "1.8.3"
-__minimal_miner_version__ = "1.8.3"
-__minimal_validator_version__ = "1.8.3"
+__version__ = "1.8.4"
+__minimal_miner_version__ = "1.8.4"
+__minimal_validator_version__ = "1.8.4"
 
 version_split = __version__.split(".")
 __version_as_int__ = (100 * int(version_split[0])) + (10 * int(version_split[1])) + (1 * int(version_split[2]))
 
 # General static vars
 # Amount staked to be considered as a valid validator
-validator_permit_stake = 1.024e3
+validator_permit_stake = 1.0e4
 weights_rate_limit = 100
 
 # Validators static vars
