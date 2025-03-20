@@ -77,10 +77,11 @@ def kill_container(deregister=False):
                 if container.name == container_name:
                     running_container = container
                     break
-            if running_container and running_container.status == "running":
-                running_container.exec_run(cmd="kill -15 1")
-                running_container.wait()
-            running_container.remove()
+            if running_container:
+                if running_container.status == "running":
+                    running_container.exec_run(cmd="kill -15 1")
+                    running_container.wait()
+                running_container.remove()
             bt.logging.info(f"Container '{container_name}' was killed successfully")
         # Kill and remove the appropriate container
         if running_container_test:
