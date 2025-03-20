@@ -81,11 +81,8 @@ def kill_container():
             running_container_test.remove()
             bt.logging.info(f"Container '{container_name_test}' was killed successfully")
         elif running_container:
-            if running_container.status == "running":
-                running_container.exec_run(cmd="kill -15 1")
-                running_container.wait()
-            running_container.remove()
-            bt.logging.info(f"Container '{container_name}' was killed successfully")
+            bt.logging.info("we shouldn't kill rent container")
+            return False
         else:
             bt.logging.info("No running container found.")
 
