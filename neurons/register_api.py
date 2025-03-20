@@ -2825,59 +2825,59 @@ class RegisterAPI:
                 check_allocation = {}
                 # Retry allocation up to max_retries times
 
-                while attempt < max_retries:
-                    attempt += 1
-                    check_allocation = await self.dendrite(
-                            axon,
-                            Allocate(
-                                timeline=timeline,
-                                device_requirement=device_requirement,
-                                checking=True,
-                                ),
-                            timeout=30
-                            )
-                    if not check_allocation or check_allocation.get("status") is not True:
-                        bt.logging.warning(
-                            f"API: Allocation check failed for hotkey: {hotkey} result: {check_allocation}, axon: {axon.ip}:{axon.port}")
-                        await asyncio.sleep(3)
-                        continue  # Move to the next axon if allocation check failed
-                    else:
-                        bt.logging.info(f"API: Allocation check passed for hotkey: {hotkey}")
-                        break
+                # while attempt < max_retries:
+                #     attempt += 1
+                #     check_allocation = await self.dendrite(
+                #             axon,
+                #             Allocate(
+                #                 timeline=timeline,
+                #                 device_requirement=device_requirement,
+                #                 checking=True,
+                #                 ),
+                #             timeout=30
+                #             )
+                #     if not check_allocation or check_allocation.get("status") is not True:
+                #         bt.logging.warning(
+                #             f"API: Allocation check failed for hotkey: {hotkey} result: {check_allocation}, axon: {axon.ip}:{axon.port}")
+                #         await asyncio.sleep(3)
+                #         continue  # Move to the next axon if allocation check failed
+                #     else:
+                #         bt.logging.info(f"API: Allocation check passed for hotkey: {hotkey}")
+                #         break
 
-                if check_allocation and check_allocation["status"] is True:
-                    try:
-                        bt.logging.info(f"API: Allocation started for hotkey: {hotkey}")
-                        register_response = await self.dendrite(
-                            axon,
-                            Allocate(
-                                timeline=60,
-                                device_requirement=device_requirement,
-                                checking=False,
-                                public_key=public_key,
-                                docker_requirement=docker_requirement,
-                            ),
-                            timeout=60,
-                        )
+                # if check_allocation and check_allocation["status"] is True:
+                try:
+                    bt.logging.info(f"API: Allocation started for hotkey: {hotkey}")
+                    register_response = await self.dendrite(
+                        axon,
+                        Allocate(
+                            timeline=60,
+                            device_requirement=device_requirement,
+                            checking=False,
+                            public_key=public_key,
+                            docker_requirement=docker_requirement,
+                        ),
+                        timeout=60,
+                    )
 
-                    except Exception as e:
-                        bt.logging.error(f"Exception during registration for hotkey {hotkey}: {e}")
-                        await asyncio.sleep(1)
-                        return {"status": False, "msg": "Requested resource is not available."}
+                except Exception as e:
+                    bt.logging.error(f"Exception during registration for hotkey {hotkey}: {e}")
+                    await asyncio.sleep(1)
+                    return {"status": False, "msg": "Requested resource is not available."}
 
-                    # bt.logging.info(register_response)
-                    if register_response and register_response["status"] is True:
-                        register_response["ip"] = axon.ip
-                        register_response["hotkey"] = axon.hotkey
-                        return register_response
-                    else:
-                        bt.logging.warning(
-                            f"API: Allocation failed for hotkey: {hotkey}, response: {register_response} axon: {axon.ip}:{axon.port}")
-                        return {"status": False, "msg": "Requested resource is not available."}
+                # bt.logging.info(register_response)
+                if register_response and register_response["status"] is True:
+                    register_response["ip"] = axon.ip
+                    register_response["hotkey"] = axon.hotkey
+                    return register_response
                 else:
                     bt.logging.warning(
-                        f"API: Allocation check attempt timeout for hotkey: {hotkey}, response: {check_allocation} axon: {axon.ip}:{axon.port}")
+                        f"API: Allocation failed for hotkey: {hotkey}, response: {register_response} axon: {axon.ip}:{axon.port}")
                     return {"status": False, "msg": "Requested resource is not available."}
+                # else:
+                #     bt.logging.warning(
+                #         f"API: Allocation check attempt timeout for hotkey: {hotkey}, response: {check_allocation} axon: {axon.ip}:{axon.port}")
+                #     return {"status": False, "msg": "Requested resource is not available."}
 
     async def _update_allocation_wandb(self, ):
         """
