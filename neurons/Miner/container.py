@@ -66,12 +66,12 @@ def kill_container():
                 running_container_test = container
                 break
 
-        # If container_name_test is not found, check for container_name
-        if not running_container_test:
-            for container in containers:
-                if container.name == container_name:
-                    running_container = container
-                    break
+        # # If container_name_test is not found, check for container_name
+        # if not running_container_test:
+        #     for container in containers:
+        #         if container.name == container_name:
+        #             running_container = container
+        #             break
 
         # Kill and remove the appropriate container
         if running_container_test:
