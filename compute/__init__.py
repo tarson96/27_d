@@ -88,4 +88,5 @@ TRUSTED_VALIDATORS_HOTKEYS = [
     "5F2CsUDVbRbVMXTh9fAzF9GacjVX7UapvRxidrxe7z8BYckQ",  # Rizzo
     "5GmvyePN9aYErXBBhBnxZKGoGk4LKZApE4NkaSzW62CYCYNA",  # Neural Inτerneτ
     "5F27Eqz2PhyMtGMEce898x31DokNqRVxkm5AhDDe6rDGNvoY",  # Love
+    "5Gy36LC7LQysM7eDwfJmHDsiQJjwYpyVjvwofMYG2r8TPDfH",  # Yuma
 ]
