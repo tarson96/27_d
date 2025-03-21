@@ -2961,7 +2961,7 @@ class RegisterAPI:
         while retries < MAX_NOTIFY_RETRY:
             try:
                 # Send the POST request
-                data = json.dumps(msg)
+                data = json.dumps(msg, separators=(',', ':'))
                 signature = hmac.new(self.webhooks_secret.encode(), data.encode(), hashlib.sha256).hexdigest()
                 headers["x-webhook-signature"] = signature
                 response = await run_in_threadpool(

@@ -18,9 +18,9 @@
 import string
 
 # Define the version of the template module.
-__version__ = "1.8.4"
-__minimal_miner_version__ = "1.8.4"
-__minimal_validator_version__ = "1.8.4"
+__version__ = "1.8.5"
+__minimal_miner_version__ = "1.8.5"
+__minimal_validator_version__ = "1.8.5"
 
 version_split = __version__.split(".")
 __version_as_int__ = (100 * int(version_split[0])) + (10 * int(version_split[1])) + (1 * int(version_split[2]))
@@ -88,4 +88,5 @@ TRUSTED_VALIDATORS_HOTKEYS = [
     "5F2CsUDVbRbVMXTh9fAzF9GacjVX7UapvRxidrxe7z8BYckQ",  # Rizzo
     "5GmvyePN9aYErXBBhBnxZKGoGk4LKZApE4NkaSzW62CYCYNA",  # Neural Inτerneτ
     "5F27Eqz2PhyMtGMEce898x31DokNqRVxkm5AhDDe6rDGNvoY",  # Love
+    "5Gy36LC7LQysM7eDwfJmHDsiQJjwYpyVjvwofMYG2r8TPDfH",  # Yuma
 ]
