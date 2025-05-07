@@ -1054,6 +1054,56 @@ class Validator:
         except Exception as e:
             bt.logging.trace(f"{axon.hotkey}: Unexpected error during deallocation: {e}")
 
+    def get_burn_uid(self) -> int:
+        """
+        Returns the UID of the subnet owner (the burn account) for this subnet.
+        """
+        # 1) Query the on-chain SubnetOwner hotkey
+        sn_owner_hotkey = self.subtensor.query_subtensor(
+            "SubnetOwnerHotkey",
+            params=[self.config.netuid],
+        )
+        bt.logging.info(f"Subnet Owner Hotkey: {sn_owner_hotkey}")
+
+        # 2) Convert that hotkey to its UID on this subnet
+        burn_uid = self.subtensor.get_uid_for_hotkey_on_subnet(
+            hotkey_ss58=sn_owner_hotkey,
+            netuid=self.config.netuid,
+        )
+        bt.logging.info(f"Subnet Owner UID (burn): {burn_uid}")
+        return burn_uid
+
+    def set_burn_weights(self):
+        """
+        Assigns 100% of the weight to the burn UID by clamping negatives → 0,
+        L1-normalizing [1.0] into a weight, and pushing on-chain.
+        """
+        # 1) fetch burn UID
+        burn_uid = self.get_burn_uid()
+
+        # 2) prepare a single-element score tensor
+        scores = torch.tensor([1.0], dtype=torch.float32)
+        scores[scores < 0] = 0
+
+        # 3) normalize into a weight vector that sums to 1
+        weights: torch.FloatTensor = torch.nn.functional.normalize(scores, p=1.0, dim=0).float()
+        bt.logging.info(f"🔥 Burn-only weight: {weights.tolist()}")
+
+        # 4) send to chain
+        result = self.subtensor.set_weights(
+            netuid=self.config.netuid,
+            wallet=self.wallet,
+            uids=[burn_uid],
+            weights=weights,
+            version_key=__version_as_int__,
+            wait_for_inclusion=False,
+        )
+
+        if isinstance(result, tuple) and result[0]:
+            bt.logging.success("✅ Successfully set burn weights.")
+        else:
+            bt.logging.error(f"❌ Failed to set burn weights: {result}")
+
     def set_weights(self):
         # Remove all negative scores and attribute them 0.
         self.scores[self.scores < 0] = 0
@@ -1165,7 +1215,8 @@ class Validator:
                     if self.current_block - self.last_updated_block > weights_rate_limit:
                         block_next_set_weights = self.current_block + weights_rate_limit
                         self.sync_scores()
-                        self.set_weights()
+                        #self.set_weights()
+                        self.set_burn_weights()
                         self.last_updated_block = self.current_block
                         self.blocks_done.clear()
                         self.blocks_done.add(self.current_block)
