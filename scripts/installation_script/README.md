@@ -47,7 +47,6 @@ chmod +x compute_subnet_installer.sh
 Run the script to install Docker, NVIDIA drivers, CUDA, and Bittensor.
 
 ```bash
-# Interactive (step-by-step questions)
 ./compute_subnet_installer.sh
 ```
 
@@ -94,9 +93,8 @@ You must have enough TAO/TestTAO to register and mine.
 Once your wallet is created and funded, re-run the script:
 
 ```bash
-./compute_subnet_installer.sh --automated
+./compute_subnet_installer.sh
 ```
-(or without `--automated` for interactive prompts).
 
 Now, the script detects a funded wallet in `~/.bittensor/wallets` and proceeds:
 
