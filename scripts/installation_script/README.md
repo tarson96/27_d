@@ -20,8 +20,8 @@ By splitting things up, you can reboot if needed after installing drivers, and e
 ### Option 1: Clone the Repository
 
 ```bash
-git clone https://github.com/neuralinternet/compute-subnet.git
-cd compute-subnet/scripts/installation_script
+git clone https://github.com/neuralinternet/ni-compute.git
+cd ni-compute/scripts/installation_script
 ```
 
 You will find the installer script named `compute_subnet_installer.sh` in the `scripts/installation_script/` folder. Make it executable:
@@ -36,7 +36,7 @@ If you prefer, you can fetch the script directly:
 
 ```bash
 curl -sL \
-  https://raw.githubusercontent.com/neuralinternet/compute-subnet/main/scripts/installation_script/compute_subnet_installer.sh \
+  https://raw.githubusercontent.com/neuralinternet/ni-compute/main/scripts/installation_script/compute_subnet_installer.sh \
   -o compute_subnet_installer.sh
 
 chmod +x compute_subnet_installer.sh
@@ -140,7 +140,7 @@ Then re-login or reboot to apply group changes.
 
 ### WANDB Key
 
-- If you skip it, you can later edit `~/.env` in the compute-subnet repo folder to add `WANDB_API_KEY="..."`.
+- If you skip it, you can later edit `~/.env` in the ni-compute repo folder to add `WANDB_API_KEY="..."`.
 
 ### CUDA/Driver Issues
 
@@ -158,4 +158,4 @@ Using this approach, you ensure that all dependencies are in place and that you 
 
 - [Weights & Biases Documentation](https://docs.wandb.ai/)
 - [Bittensor Documentation](https://docs.bittensor.com/)
-- [Compute-Subnet Repository](https://github.com/neuralinternet/compute-subnet)
+- [NI Compute Repository](https://github.com/neuralinternet/ni-compute)
