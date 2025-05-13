@@ -69,6 +69,12 @@ else
   HOME_DIR="$(eval echo "~$REAL_USER")"
 fi
 
+# Definir el directorio del entorno virtual
+VENV_DIR="${HOME_DIR}/venv"
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+  source "${VENV_DIR}/bin/activate"
+fi
+
 ##############################################################################
 #                      2) Check / Install Docker
 ##############################################################################
@@ -118,9 +124,41 @@ cuda_version_installed() {
   echo "$ver"
 }
 
+##############################################################################
+#                      5) Check / Install PM2
+##############################################################################
+pm2_installed() {
+  # Verificar si estamos en un entorno virtual
+  if [ -z "${VIRTUAL_ENV:-}" ]; then
+    return 1
+  fi
+
+  # Verificar si pm2 está instalado en el entorno virtual
+  if "${VIRTUAL_ENV}/bin/pm2" --version >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+##############################################################################
+#                      6) Check / Install btcli
+##############################################################################
+btcli_installed() {
+  # Verificar si estamos en un entorno virtual
+  if [ -z "${VIRTUAL_ENV:-}" ]; then
+    return 1
+  fi
+
+  # Verificar si btcli está instalado en el entorno virtual
+  if "${VIRTUAL_ENV}/bin/btcli" --version >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 CURRENT_CUDA=$(cuda_version_installed)
 
-if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]; then
+if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]] || ! pm2_installed || ! btcli_installed; then
   echo
   echo "                        @@@@                                                                                        @@@@"
   echo "                       @@@@      @@@@@@@@@@@@@@@@    @@@@@@@@        @@@    @@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@      @@@@"
