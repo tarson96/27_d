@@ -128,12 +128,10 @@ cuda_version_installed() {
 #                      5) Check / Install PM2
 ##############################################################################
 pm2_installed() {
-  # Verificar si estamos en un entorno virtual
   if [ -z "${VIRTUAL_ENV:-}" ]; then
     return 1
   fi
 
-  # Verificar si pm2 está instalado en el entorno virtual
   if "${VIRTUAL_ENV}/bin/pm2" --version >/dev/null 2>&1; then
     return 0
   fi
@@ -144,12 +142,10 @@ pm2_installed() {
 #                      6) Check / Install btcli
 ##############################################################################
 btcli_installed() {
-  # Verificar si estamos en un entorno virtual
   if [ -z "${VIRTUAL_ENV:-}" ]; then
     return 1
   fi
 
-  # Verificar si btcli está instalado en el entorno virtual
   if "${VIRTUAL_ENV}/bin/btcli" --version >/dev/null 2>&1; then
     return 0
   fi
@@ -422,10 +418,27 @@ EOF
   info "Installing OpenCL libraries..."
   sudo apt-get install -y ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
 
-  info "Installing npm and PM2..."
+  info "Installing Node.js, npm and PM2..."
+  # Update repositories
   sudo apt-get update
-  sudo apt-get install -y npm || abort "Failed to install npm."
+
+  # Install curl if not installed
+  sudo apt-get install -y curl
+
+  # Add NodeSource repository for Node.js 18.x (LTS)
+  curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+
+  # Install Node.js and npm
+  sudo apt-get install -y nodejs || abort "Failed to install Node.js."
+
+  # Verify Node.js version
+  node -v
+
+  # Install PM2 globally
   sudo npm install -g pm2 || abort "Failed to install PM2."
+
+  # Verify PM2 installation
+  pm2 --version || echo "PM2 installation may have issues."
 fi
 
 ##############################################################################
