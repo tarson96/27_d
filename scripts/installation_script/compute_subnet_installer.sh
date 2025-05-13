@@ -647,6 +647,11 @@ inject_wandb_env() {
     info "WANDB_API_KEY is empty, leaving .env as is."
   fi
 
+  # Configurar SQLITE_DB_PATH
+  info "Configuring SQLITE_DB_PATH in .env"
+  sed -i "s@^SQLITE_DB_PATH=.*@SQLITE_DB_PATH=\"${CS_PATH}/database.db\"@" "$env_path" 2>/dev/null \
+    || info "Note: Could not update SQLITE_DB_PATH line in .env (it might not exist)."
+
   info "Finished .env configuration."
 }
 
