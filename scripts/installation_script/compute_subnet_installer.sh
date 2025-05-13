@@ -419,25 +419,18 @@ EOF
   sudo apt-get install -y ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
 
   info "Installing Node.js, npm and PM2..."
-  # Update repositories
   sudo apt-get update
 
-  # Install curl if not installed
   sudo apt-get install -y curl
 
-  # Add NodeSource repository for Node.js 18.x (LTS)
   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 
-  # Install Node.js and npm
   sudo apt-get install -y nodejs || abort "Failed to install Node.js."
 
-  # Verify Node.js version
   node -v
 
-  # Install PM2 globally
   sudo npm install -g pm2 || abort "Failed to install PM2."
 
-  # Verify PM2 installation
   pm2 --version || echo "PM2 installation may have issues."
 fi
 
