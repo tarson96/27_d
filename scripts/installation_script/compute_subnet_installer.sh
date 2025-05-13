@@ -124,19 +124,6 @@ cuda_version_installed() {
   echo "$ver"
 }
 
-##############################################################################
-#                      5) Check / Install PM2
-##############################################################################
-pm2_installed() {
-  if [ -z "${VIRTUAL_ENV:-}" ]; then
-    return 1
-  fi
-
-  if "${VIRTUAL_ENV}/bin/pm2" --version >/dev/null 2>&1; then
-    return 0
-  fi
-  return 1
-}
 
 ##############################################################################
 #                      6) Check / Install btcli
@@ -154,7 +141,7 @@ btcli_installed() {
 
 CURRENT_CUDA=$(cuda_version_installed)
 
-if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]] || ! pm2_installed || ! btcli_installed; then
+if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]] || ! btcli_installed; then
   echo
   echo "                        @@@@                                                                                        @@@@"
   echo "                       @@@@      @@@@@@@@@@@@@@@@    @@@@@@@@        @@@    @@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@      @@@@"
