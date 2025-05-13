@@ -676,10 +676,10 @@ if [ ! -x "${CS_PATH}/neurons/miner.py" ]; then
 fi
 
 info "Starting miner with PM2..."
+cd "${CS_PATH}" && \
 source "${VENV_DIR}/bin/activate" && \
 pm2 start "${VENV_DIR}/bin/python3" \
   --name "subnet${NETUID}_miner" \
-  --cwd "${CS_PATH}" \
   -- \
   "${CS_PATH}/neurons/miner.py" \
   --netuid "${NETUID}" \
