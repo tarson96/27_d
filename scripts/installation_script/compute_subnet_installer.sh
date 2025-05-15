@@ -69,6 +69,12 @@ else
   HOME_DIR="$(eval echo "~$REAL_USER")"
 fi
 
+# Definir el directorio del entorno virtual
+VENV_DIR="${HOME_DIR}/venv"
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+  source "${VENV_DIR}/bin/activate"
+fi
+
 ##############################################################################
 #                      2) Check / Install Docker
 ##############################################################################
@@ -118,20 +124,36 @@ cuda_version_installed() {
   echo "$ver"
 }
 
-CURRENT_CUDA=$(cuda_version_installed)
 
 ##############################################################################
-#                      5) Check / Install Bittensor
+#                      6) Check / Install btcli
 ##############################################################################
-bittensor_installed() {
-  # Basic check: if 'btcli' is in PATH
-  if command -v btcli >/dev/null 2>&1; then
+btcli_installed() {
+  if [ -z "${VIRTUAL_ENV:-}" ]; then
+    return 1
+  fi
+
+  if "${VIRTUAL_ENV}/bin/btcli" --version >/dev/null 2>&1; then
     return 0
   fi
   return 1
 }
 
-if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]] || ! bittensor_installed; then
+CURRENT_CUDA=$(cuda_version_installed)
+
+if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]] || ! btcli_installed; then
+  echo
+  echo "                        @@@@                                                                                        @@@@"
+  echo "                       @@@@      @@@@@@@@@@@@@@@@    @@@@@@@@        @@@    @@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@      @@@@"
+  echo "                       @@@      @@@@@@@@@@@@@@@@@    @@@@@@@@@       @@@    @@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@      @@@"
+  echo "                       @@@      @@                   @@@@   @@@      @@@                   @@@                @@@     @@@"
+  echo "                       @@@      @@@@@@@@@@@@@@@@     @@@@    @@@     @@@     @@@@@@@@@@@@@@@@                 @@@     @@@"
+  echo "                       @@@        @@@@@@@@@@@@@@@@   @@@@     @@@    @@@    @@@@@@@@@@@@@@@@                  @@@     @@@"
+  echo "                       @@@                     @@@   @@@@      @@@   @@@   @@@                                @@@     @@@"
+  echo "                       @@@      @@@@@@@@@@@@@@@@@@   @@@@       @@@@@@@@   @@@@@@@@@@@@@@@@@@                 @@@     @@@"
+  echo "                       @@@@     @@@@@@@@@@@@@@@@     @@@@        @@@@@@@   @@@@@@@@@@@@@@@@@@                 @@@    @@@@"
+  echo "                         @@@                                                                                        @@@"
+  echo
   info "This script will install Docker, NVIDIA drivers, NVIDIA Docker, CUDA 12.8, and Bittensor if they are not present. It will then optionally set up the compute-subnet miner."
   pause_for_user
 
@@ -247,133 +269,228 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     NEED_REBOOT=1
   fi
 
-  if bittensor_installed; then
-    info "Bittensor is already installed. Skipping re-installation."
-  else
-    info "Bittensor is not installed."
 
-    if $AUTOMATED; then
-      info "Automated mode: Installing Bittensor (user-level, no virtualenv) from PyPI."
+  ##############################################################################
+  # Attempt to detect or clone the compute-subnet repository
+  ##############################################################################
+  COMPUTE_SUBNET_GIT="https://github.com/neuralinternet/ni-compute.git"
+  COMPUTE_SUBNET_DIR="compute-subnet"
 
-      sudo apt-get update -y || abort "Failed to update apt."
-      sudo apt-get install -y python3 python3-pip git || abort "Failed to install Python or Git."
+  # Check if we're already inside a Git repo
+  if $AUTOMATED; then
+    echo "AUTOMATED mode detected. Changing directory to /home/ubuntu/compute-subnet..."
+    cd /home/ubuntu/compute-subnet || {
+      echo "ERROR: Failed to change directory to /home/ubuntu/compute-subnet."
+      exit 1
+    }
+  fi
+  if REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+    info "Detected Git repository root: $REPO_ROOT"
+    cd "$REPO_ROOT" || abort "Failed to cd into $REPO_ROOT"
+    CS_PATH="$REPO_ROOT"
 
-      python3 -m pip install --upgrade pip || abort "Failed to upgrade pip."
-
-      python3 -m pip install --user bittensor-cli || abort "Failed to install Bittensor (user-level)."
-
-      if ! grep -qF "$HOME/.local/bin" "$HOME/.bashrc"; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-        info "Added '$HOME/.local/bin' to PATH in .bashrc"
+    # Check if we have setup.py / pyproject.toml inside the root
+    if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
+      info "No setup.py or pyproject.toml in the detected Git root."
+      info "Attempting to find or clone the compute-subnet repo..."
+      # If the folder doesn't exist, clone it
+      if [ ! -d "$COMPUTE_SUBNET_DIR" ]; then
+        git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone compute-subnet."
       fi
-
-      if [ -f "$HOME/.bashrc" ]; then
-        source "$HOME/.bashrc"
-        info "Sourced $HOME/.bashrc. PATH is now: $PATH"
-      fi
-
-      export PATH="$HOME/.local/bin:$PATH"
-      info "Manually exported ~/.local/bin to PATH for the current shell."
-
-      if ! command -v btcli >/dev/null 2>&1; then
-        echo "WARNING: btcli is still not recognized in this non-interactive shell."
-        echo "It will be recognized once you log in as $USER or start a new interactive session."
-      else
-        info "btcli is recognized in the current environment now."
-      fi
-
-      info "Bittensor installed successfully at user-level (no virtualenv)."
-
-    else
-      info "Interactive mode: Installing Bittensor using the official script."
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/opentensor/bittensor/master/scripts/install.sh)" \
-        || abort "Bittensor installation failed."
-      info "Bittensor installed successfully."
-      info "Installing btcli"
-      mkdir -p ~/.btcli/btcli
-      git clone https://github.com/opentensor/btcli.git ~/.btcli/btcli/ 2> /dev/null || (cd ~/.btcli/btcli/ ; git fetch origin master ; git checkout master ; git pull --ff-only ; git reset --hard ; git clean -xdf)
-      python3 -m pip install -e ~/.btcli/btcli
-      NEED_REBOOT=1
+      cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter compute-subnet directory."
+      CS_PATH="$(pwd)"
     fi
 
-    info "Bittensor installation process completed."
-  fi
-
-  ##############################################################################
-  # Ensure that the 'btcli' command is recognized without a reboot
-  ##############################################################################
-
-  # 1. Force-add $HOME/.local/bin to PATH in .bashrc if not present
-  if ! grep -qF "$HOME/.local/bin" "$HOME/.bashrc"; then
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-    echo "Added '$HOME/.local/bin' to PATH in .bashrc"
   else
-    echo "'$HOME/.local/bin' is already in PATH in .bashrc"
-  fi
+    # We are not inside a Git repo, so let's see if we already have 'compute-subnet' folder
+    CS_PATH="$(pwd)"
 
-  # 2. Source .bashrc so our *current* shell process updates its PATH
-  #    Normally, you'd need to start a new shell, but let's force it now:
-  if [ -f "$HOME/.bashrc" ]; then
-    # We use 'source' to load environment changes into the current session
-    source "$HOME/.bashrc"
-    echo "Sourced $HOME/.bashrc, PATH is now: $PATH"
-  fi
+    if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
+      info "Could not find setup.py or pyproject.toml in current directory."
+      info "Attempting to find or clone the compute-subnet repo..."
 
-  # 3. Test if btcli is found
-  if command -v btcli >/dev/null 2>&1; then
-    echo "btcli is now recognized."
-  else
-    echo "WARNING: btcli is still not recognized. Check your PATH or installation."
-  fi
-
-  ##############################################################################
-  # Define function to suggest reboot only if NEED_REBOOT=1
-  ##############################################################################
-  maybe_reboot_suggestion() {
-    if [[ $NEED_REBOOT -eq 1 ]]; then
-      echo
-      echo "Some core components (Docker, CUDA, Bittensor) were installed or updated."
-      echo "A reboot is strongly recommended before creating/funding your wallet or proceeding."
-      read -rp "Press 'r' to reboot now, or any other key to skip: " reboot_choice
-      if [[ "$reboot_choice" =~ ^[Rr]$ ]]; then
-        info "Rebooting..."
-        sudo reboot
-      else
-        info "Skipping reboot. You may do it manually later if needed."
+      # If no local 'compute-subnet' folder, clone it
+      if [ ! -d "$COMPUTE_SUBNET_DIR" ]; then
+        git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone compute-subnet."
       fi
-    else
-      info "No new installations were performed, so no reboot needed."
-    fi
-  }
+      cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter compute-subnet directory."
+      CS_PATH="$(pwd)"
 
-  ##############################################################################
-  # Prompt user if they want to set up the miner now
-  ##############################################################################
-  AUTOMATED=${AUTOMATED:-false}
+      # Double-check we have setup.py or pyproject.toml now
+      if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
+        abort "Still could not find setup.py or pyproject.toml even after cloning. Please check the repo."
+      fi
+
+    else
+      # If we do find them in the current directory, that means we are already in compute-subnet root
+      info "Found setup.py or pyproject.toml here. Proceeding."
+    fi
+  fi
 
   if $AUTOMATED; then
-    SETUP_MINER="yes"
+    # Attempt to use /home/ubuntu/compute-subnet as the repo if it exists
+    if [ -f "/home/ubuntu/compute-subnet/setup.py" ] || [ -f "/home/ubuntu/compute-subnet/pyproject.toml" ]; then
+      CS_PATH="/home/ubuntu/compute-subnet"
+    else
+      CS_PATH="$(pwd)"
+    fi
+    cd "$CS_PATH" || abort "Failed to change directory to $CS_PATH"
   else
+    if REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+      info "Detected repository root: $REPO_ROOT"
+      cd "$REPO_ROOT" || abort "Failed to cd into $REPO_ROOT"
+      CS_PATH="$REPO_ROOT"
+    else
+      CS_PATH="$(pwd)"
+      if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
+        abort "Could not find setup.py or pyproject.toml. Please run from within compute-subnet repo root."
+      fi
+    fi
+  fi
+
+  VENV_DIR="${HOME_DIR}/venv"
+
+  cat << "EOF"
+
+  =============================================
+    compute-subnet Installer - Miner Setup
+  =============================================
+EOF
+
+  # Create/activate venv
+  if [ -z "${VIRTUAL_ENV:-}" ] || [ "$VIRTUAL_ENV" != "$VENV_DIR" ]; then
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+      info "Activating existing virtual environment at ${VENV_DIR}..."
+      source "$VENV_DIR/bin/activate"
+    else
+      info "No virtual environment found. Creating one at ${VENV_DIR}..."
+      if ! python3 -m ensurepip --version > /dev/null 2>&1; then
+        info "ensurepip not available. Installing python-venv..."
+        py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        sudo apt-get update || abort "Failed to update package lists."
+        sudo apt-get install -y python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
+      fi
+      python3 -m venv "$VENV_DIR" || abort "Failed to create virtual environment."
+      info "Activating virtual environment..."
+      source "$VENV_DIR/bin/activate"
+    fi
+  fi
+
+  info "Updating system packages for compute-subnet dependencies..."
+  sudo apt-get update || abort "Failed to update package lists."
+  sudo apt-get install -y python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) || abort "Failed to install required packages."
+
+  info "Upgrading pip in the virtual environment..."
+  pip install --upgrade pip || abort "Failed to upgrade pip."
+
+  if [ -f "requirements.txt" ]; then
+    info "Installing base dependencies from requirements.txt..."
+    pip install -r requirements.txt || abort "Failed to install requirements."
+  fi
+
+  if [ -f "requirements-compute.txt" ]; then
+    info "Installing compute-specific dependencies (no-deps) from requirements-compute.txt..."
+    pip install --no-deps -r requirements-compute.txt || abort "Failed to install requirements-compute."
+  fi
+
+  info "Installing compute-subnet in editable mode..."
+  pip install -e . || abort "Failed to install compute-subnet (editable)."
+
+  python -c "import torch" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    info "PyTorch not found. Installing torch, torchvision, torchaudio..."
+    pip install torch torchvision torchaudio || abort "Failed to install PyTorch."
+  fi
+
+  info "Installing OpenCL libraries..."
+  sudo apt-get install -y ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
+
+  info "Installing Node.js, npm and PM2..."
+  sudo apt-get update
+
+  sudo apt-get install -y curl
+
+  curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+
+  sudo apt-get install -y nodejs || abort "Failed to install Node.js."
+
+  node -v
+
+  sudo npm install -g pm2 || abort "Failed to install PM2."
+
+  pm2 --version || echo "PM2 installation may have issues."
+fi
+
+##############################################################################
+# Ensure that the 'btcli' command is recognized without a reboot
+##############################################################################
+
+# 1. Force-add $HOME/.local/bin to PATH in .bashrc if not present
+if ! grep -qF "$HOME/.local/bin" "$HOME/.bashrc"; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    echo "Added '$HOME/.local/bin' to PATH in .bashrc"
+else
+    echo "'$HOME/.local/bin' is already in PATH in .bashrc"
+fi
+
+# 2. Source .bashrc so our *current* shell process updates its PATH
+if [ -f "$HOME/.bashrc" ]; then
+    source "$HOME/.bashrc"
+    echo "Sourced $HOME/.bashrc, PATH is now: $PATH"
+fi
+
+# 3. Test if btcli is found
+if command -v btcli >/dev/null 2>&1; then
+    echo "btcli is now recognized."
+else
+    echo "WARNING: btcli is still not recognized. Check your PATH or installation."
+fi
+
+##############################################################################
+# Define function to suggest reboot only if NEED_REBOOT=1
+##############################################################################
+maybe_reboot_suggestion() {
+    if [[ $NEED_REBOOT -eq 1 ]]; then
+        echo
+        echo "Some core components (Docker, CUDA, Bittensor) were installed or updated."
+        echo "A reboot is strongly recommended before creating/funding your wallet or proceeding."
+        read -rp "Press 'r' to reboot now, or any other key to skip: " reboot_choice
+        if [[ "$reboot_choice" =~ ^[Rr]$ ]]; then
+            info "Rebooting..."
+            sudo reboot
+        else
+            info "Skipping reboot. You may do it manually later if needed."
+        fi
+    else
+        info "No new installations were performed, so no reboot needed."
+    fi
+}
+
+##############################################################################
+# Prompt user if they want to set up the miner now
+##############################################################################
+AUTOMATED=${AUTOMATED:-false}
+
+if $AUTOMATED; then
+    SETUP_MINER="yes"
+else
     echo
     echo "All base installations (Docker, NVIDIA, CUDA, Bittensor) are complete."
-    echo "Would you like to set up the compute-subnet miner now?"
+    echo "Would you like to set up the miner now?"
     select yn in "Yes" "No"; do
-      case $yn in
-        Yes )
-          SETUP_MINER="yes"
-          break
-          ;;
-        No )
-          info "Skipping compute-subnet miner setup."
-          info "You can re-run this script later if you change your mind."
-
-          # Call our reboot suggestion function before exit
-          maybe_reboot_suggestion
-          exit 0
-          ;;
-      esac
+        case $yn in
+            Yes)
+                SETUP_MINER="yes"
+                break
+                ;;
+            No)
+                info "Skipping miner setup."
+                info "You can re-run this script later if you change your mind."
+                maybe_reboot_suggestion
+                exit 0
+                ;;
+        esac
     done
-  fi
 fi
 
 ##############################################################################
@@ -419,146 +536,6 @@ fi
 #      8) Install/Update compute-subnet environment and set up the miner
 ##############################################################################
 info "Components already installed, proceeding with miner creation..."
-##############################################################################
-# Attempt to detect or clone the compute-subnet repository
-##############################################################################
-COMPUTE_SUBNET_GIT="https://github.com/neuralinternet/compute-subnet.git"
-COMPUTE_SUBNET_DIR="compute-subnet"
-
-# Check if we're already inside a Git repo
-if $AUTOMATED; then
-  echo "AUTOMATED mode detected. Changing directory to /home/ubuntu/compute-subnet..."
-  cd /home/ubuntu/compute-subnet || {
-    echo "ERROR: Failed to change directory to /home/ubuntu/compute-subnet."
-    exit 1
-  }
-fi
-if REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
-  info "Detected Git repository root: $REPO_ROOT"
-  cd "$REPO_ROOT" || abort "Failed to cd into $REPO_ROOT"
-  CS_PATH="$REPO_ROOT"
-
-  # Check if we have setup.py / pyproject.toml inside the root
-  if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
-    info "No setup.py or pyproject.toml in the detected Git root."
-    info "Attempting to find or clone the compute-subnet repo..."
-    # If the folder doesn't exist, clone it
-    if [ ! -d "$COMPUTE_SUBNET_DIR" ]; then
-      git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone compute-subnet."
-    fi
-    cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter compute-subnet directory."
-    CS_PATH="$(pwd)"
-  fi
-
-else
-  # We are not inside a Git repo, so let's see if we already have 'compute-subnet' folder
-  CS_PATH="$(pwd)"
-
-  if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
-    info "Could not find setup.py or pyproject.toml in current directory."
-    info "Attempting to find or clone the compute-subnet repo..."
-
-    # If no local 'compute-subnet' folder, clone it
-    if [ ! -d "$COMPUTE_SUBNET_DIR" ]; then
-      git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone compute-subnet."
-    fi
-    cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter compute-subnet directory."
-    CS_PATH="$(pwd)"
-
-    # Double-check we have setup.py or pyproject.toml now
-    if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
-      abort "Still could not find setup.py or pyproject.toml even after cloning. Please check the repo."
-    fi
-
-  else
-    # If we do find them in the current directory, that means we are already in compute-subnet root
-    info "Found setup.py or pyproject.toml here. Proceeding."
-  fi
-fi
-
-if $AUTOMATED; then
-  # Attempt to use /home/ubuntu/compute-subnet as the repo if it exists
-  if [ -f "/home/ubuntu/compute-subnet/setup.py" ] || [ -f "/home/ubuntu/compute-subnet/pyproject.toml" ]; then
-    CS_PATH="/home/ubuntu/compute-subnet"
-  else
-    CS_PATH="$(pwd)"
-  fi
-  cd "$CS_PATH" || abort "Failed to change directory to $CS_PATH"
-else
-  if REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
-    info "Detected repository root: $REPO_ROOT"
-    cd "$REPO_ROOT" || abort "Failed to cd into $REPO_ROOT"
-    CS_PATH="$REPO_ROOT"
-  else
-    CS_PATH="$(pwd)"
-    if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
-      abort "Could not find setup.py or pyproject.toml. Please run from within compute-subnet repo root."
-    fi
-  fi
-fi
-
-VENV_DIR="${HOME_DIR}/venv"
-
-cat << "EOF"
-
-   =============================================
-    compute-subnet Installer - Miner Setup
-   =============================================
-
-EOF
-
-# Create/activate venv
-if [ -z "${VIRTUAL_ENV:-}" ] || [ "$VIRTUAL_ENV" != "$VENV_DIR" ]; then
-  if [ -f "$VENV_DIR/bin/activate" ]; then
-    info "Activating existing virtual environment at ${VENV_DIR}..."
-    source "$VENV_DIR/bin/activate"
-  else
-    info "No virtual environment found. Creating one at ${VENV_DIR}..."
-    if ! python3 -m ensurepip --version > /dev/null 2>&1; then
-      info "ensurepip not available. Installing python-venv..."
-      py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-      sudo apt-get update || abort "Failed to update package lists."
-      sudo apt-get install -y python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
-    fi
-    python3 -m venv "$VENV_DIR" || abort "Failed to create virtual environment."
-    info "Activating virtual environment..."
-    source "$VENV_DIR/bin/activate"
-  fi
-fi
-
-info "Updating system packages for compute-subnet dependencies..."
-sudo apt-get update || abort "Failed to update package lists."
-sudo apt-get install -y python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) || abort "Failed to install required packages."
-
-info "Upgrading pip in the virtual environment..."
-pip install --upgrade pip || abort "Failed to upgrade pip."
-
-if [ -f "requirements.txt" ]; then
-  info "Installing base dependencies from requirements.txt..."
-  pip install -r requirements.txt || abort "Failed to install requirements."
-fi
-
-if [ -f "requirements-compute.txt" ]; then
-  info "Installing compute-specific dependencies (no-deps) from requirements-compute.txt..."
-  pip install --no-deps -r requirements-compute.txt || abort "Failed to install requirements-compute."
-fi
-
-info "Installing compute-subnet in editable mode..."
-pip install -e . || abort "Failed to install compute-subnet (editable)."
-
-python -c "import torch" 2>/dev/null
-if [ $? -ne 0 ]; then
-  info "PyTorch not found. Installing torch, torchvision, torchaudio..."
-  pip install torch torchvision torchaudio || abort "Failed to install PyTorch."
-fi
-
-info "Installing OpenCL libraries..."
-sudo apt-get install -y ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
-
-info "Installing npm and PM2..."
-sudo apt-get update
-sudo apt-get install -y npm || abort "Failed to install npm."
-sudo npm install -g pm2 || abort "Failed to install PM2."
 
 ##############################################################################
 #                      9) Configure firewall (UFW)
@@ -613,6 +590,27 @@ info "UFW is enabled. Allowed ports: 22 (SSH), 4444 (validator), ${AXON_PORT} (A
 ##############################################################################
 #                      10) WANDB configuration
 ##############################################################################
+
+# Verificar y establecer CS_PATH si no está definido
+if [ -z "${CS_PATH:-}" ]; then
+  if $AUTOMATED; then
+    if [ -f "/home/ubuntu/compute-subnet/setup.py" ] || [ -f "/home/ubuntu/compute-subnet/pyproject.toml" ]; then
+      CS_PATH="/home/ubuntu/compute-subnet"
+    else
+      CS_PATH="$(pwd)"
+    fi
+  else
+    if REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+      CS_PATH="$REPO_ROOT"
+    else
+      CS_PATH="$(pwd)"
+      if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
+        abort "Could not find setup.py or pyproject.toml. Please run from within compute-subnet repo root."
+      fi
+    fi
+  fi
+fi
+
 ask_user_for_wandb() {
   read -rp "Enter your WANDB_API_KEY (leave blank if none): " WANDB_API_KEY
 }
@@ -649,6 +647,11 @@ inject_wandb_env() {
     info "WANDB_API_KEY is empty, leaving .env as is."
   fi
 
+  # Configurar SQLITE_DB_PATH
+  info "Configuring SQLITE_DB_PATH in .env"
+  sed -i "s@^SQLITE_DB_PATH=.*@SQLITE_DB_PATH=\"${CS_PATH}/database.db\"@" "$env_path" 2>/dev/null \
+    || info "Note: Could not update SQLITE_DB_PATH line in .env (it might not exist)."
+
   info "Finished .env configuration."
 }
 
@@ -665,6 +668,9 @@ inject_wandb_env
 #                      11) PM2 miner launch
 ##############################################################################
 
+# Asegurarnos de que VENV_DIR esté definido
+VENV_DIR="${HOME_DIR}/venv"
+
 if [ ! -f "${CS_PATH}/neurons/miner.py" ]; then
   abort "miner.py not found in ${CS_PATH}/neurons. Please check the repository structure."
 fi
@@ -674,40 +680,34 @@ if [ ! -x "${CS_PATH}/neurons/miner.py" ]; then
   chmod +x "${CS_PATH}/neurons/miner.py" || abort "Failed to chmod +x miner.py."
 fi
 
-info "Creating PM2 config for the miner..."
-CURRENT_PATH=${PATH}
-CURRENT_LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-""}
-PM2_CONFIG_FILE="${CS_PATH}/pm2_miner_config.json"
-
-cat > "$PM2_CONFIG_FILE" <<EOF
-{
-  "apps": [{
-    "name": "subnet${NETUID}_miner",
-    "cwd": "${CS_PATH}",
-    "script": "./neurons/miner.py",
-    "interpreter": "${VENV_DIR}/bin/python3",
-    "args": "--netuid ${NETUID} --subtensor.network ${SUBTENSOR_NETWORK} --axon.port ${AXON_PORT} --logging.debug --miner.blacklist.force_validator_permit --auto_update yes",
-    "env": {
-      "HOME": "${HOME_DIR}",
-      "PATH": "/usr/local/cuda-12.8/bin:${CURRENT_PATH}",
-      "LD_LIBRARY_PATH": "/usr/local/cuda-12.8/lib64:${CURRENT_LD_LIBRARY_PATH}"
-    },
-    "out_file": "${CS_PATH}/pm2_out.log",
-    "error_file": "${CS_PATH}/pm2_error.log"
-  }]
-}
-EOF
-
-info "PM2 config file created at: $PM2_CONFIG_FILE"
-
 info "Starting miner with PM2..."
-pm2 start "$PM2_CONFIG_FILE" || abort "Failed to start miner process in PM2."
+cd "${CS_PATH}" && \
+source "${VENV_DIR}/bin/activate" && \
+pm2 start "${VENV_DIR}/bin/python3" \
+  --name "subnet${NETUID}_miner" \
+  -- \
+  "${CS_PATH}/neurons/miner.py" \
+  --netuid "${NETUID}" \
+  --subtensor.network "${SUBTENSOR_NETWORK}" \
+  --wallet.name "default" \
+  --wallet.hotkey "default" \
+  --axon.port "${AXON_PORT}" \
+  --logging.debug \
+  --miner.blacklist.force_validator_permit \
+  --auto_update yes \
+  --env "HOME=${HOME_DIR}" \
+  --env "PATH=/usr/local/cuda-12.8/bin:${PATH}" \
+  --env "LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}" \
+  --output "${CS_PATH}/pm2_out.log" \
+  --error "${CS_PATH}/pm2_error.log" \
+  || abort "Failed to start miner process in PM2."
 
 echo
 info "Miner process started under PM2."
-echo "Use 'pm2 logs subnet${NETUID}_miner' to see logs, or check ${CS_PATH}/pm2_out.log / pm2_error.log."
+echo "Use 'source ${VENV_DIR}/bin/activate && pm2 logs subnet${NETUID}_miner' to see logs, or check ${CS_PATH}/pm2_out.log / pm2_error.log."
+
 if $AUTOMATED; then
-  pm2 save
+  source "${VENV_DIR}/bin/activate" && pm2 save
   PM2_PATH=$(which pm2)
   sudo env PATH=$PATH:/usr/bin $PM2_PATH startup systemd -u $USER --hp /home/$USER
 else
@@ -717,7 +717,7 @@ else
   select yn in "Yes" "No"; do
     case $yn in
       Yes )
-        pm2 save
+        source "${VENV_DIR}/bin/activate" && pm2 save
         PM2_PATH=$(which pm2)
         sudo env PATH=$PATH:/usr/bin $PM2_PATH startup systemd -u $USER --hp /home/$USER
         break
