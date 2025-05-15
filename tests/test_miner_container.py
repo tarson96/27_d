@@ -360,7 +360,7 @@ class TestKillContainer:
         """
         docker_client_with_test_container.images.prune = MagicMock()
         mock_get_docker.return_value = (docker_client_with_test_container, [running_test_container])
-        result = kill_container()
+        result = kill_container(True)
         running_test_container.exec_run.assert_called_once_with(cmd="kill -15 1")
         running_test_container.wait.assert_called_once()
         running_test_container.remove.assert_called_once()
@@ -376,7 +376,7 @@ class TestKillContainer:
         running_test_container.status = "exited"
         docker_client_with_test_container.images.prune = MagicMock()
         mock_get_docker.return_value = (docker_client_with_test_container, [running_test_container])
-        result = kill_container()
+        result = kill_container(True)
         running_test_container.exec_run.assert_not_called()
         running_test_container.wait.assert_not_called()
         running_test_container.remove.assert_called_once()
@@ -391,7 +391,7 @@ class TestKillContainer:
         """
         docker_client_with_container.images.prune = MagicMock()
         mock_get_docker.return_value = (docker_client_with_container, [running_container])
-        result = kill_container()
+        result = kill_container(True)
         running_container.exec_run.assert_called_once_with(cmd="kill -15 1")
         running_container.wait.assert_called_once()
         running_container.remove.assert_called_once()
@@ -406,7 +406,7 @@ class TestKillContainer:
         """
         docker_client_with_container.images.prune = MagicMock()
         mock_get_docker.return_value = (docker_client_with_container, [exited_container])
-        result = kill_container()
+        result = kill_container(True)
         exited_container.exec_run.assert_not_called()
         exited_container.wait.assert_not_called()
         exited_container.remove.assert_called_once()
@@ -452,7 +452,7 @@ class TestKillContainer:
         client.images.prune = MagicMock()
         containers = [mock_container]
         with patch('neurons.Miner.container.get_docker', return_value=(client, containers)):
-            result = kill_container()
+            result = kill_container(True)
             mock_container.exec_run.assert_not_called()
             mock_container.wait.assert_not_called()
             mock_container.remove.assert_not_called()
@@ -465,7 +465,7 @@ class TestKillContainer:
         Returns False when get_docker raises an exception.
         """
         with patch('neurons.Miner.container.get_docker', side_effect=Exception("Test error")):
-            result = kill_container()
+            result = kill_container(True)
             assert result is False
 
 
