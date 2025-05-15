@@ -355,7 +355,7 @@ class Validator:
                     else:
                         score = 0
                         self.stats[uid]["own_score"] = True  # or "no"
-                
+
                 if hotkey in self.penalized_hotkeys:
                     score = 0
                 self.stats[uid]["score"] = score*100

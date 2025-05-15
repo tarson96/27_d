@@ -421,15 +421,15 @@ class TestKillContainer:
         mock_regular_container = MagicMock()
         mock_regular_container.name = "container"
         mock_regular_container.status = "running"
-        
+
         mock_test_container = MagicMock()
         mock_test_container.name = "test_container"
         mock_test_container.status = "running"
-        
+
         client = MagicMock()
         client.images.prune = MagicMock()
         containers = [mock_regular_container, mock_test_container]
-        
+
         with patch('neurons.Miner.container.get_docker', return_value=(client, containers)):
             result = kill_container()
             mock_test_container.exec_run.assert_called_once_with(cmd="kill -15 1")

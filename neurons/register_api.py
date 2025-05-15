@@ -1870,7 +1870,7 @@ class RegisterAPI:
             allocated_hotkeys = await run_in_threadpool(self.wandb.get_allocated_hotkeys, VALID_VALIDATOR_HOTKEYS, True)
             # print(f"Allocated hotkeys: {allocated_hotkeys}")
             bt.logging.info(f"API: Number of allocated hotkeys: {len(allocated_hotkeys)}")
-            # get get_penalized_hotkeys_checklist 
+            # get get_penalized_hotkeys_checklist
             penalized_hotkeys = self.wandb.get_penalized_hotkeys_checklist_bak([],True) # get_penalized_hotkeys_checklist_bak will have NI validator hotkey hardcoded
             db = ComputeDb()
 
