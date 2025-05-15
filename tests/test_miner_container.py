@@ -413,10 +413,10 @@ class TestKillContainer:
         docker_client_with_container.images.prune.assert_called_once_with(filters={"dangling": True})
         assert result is True
 
-    def test_kill_container_priority(self):
+    def test_kill_container_deregister_false(self):
         """
         kill_container:
-        Prioritizes killing the test container over the regular container.
+        When deregister=False, only looks for and removes the test container.
         """
         mock_regular_container = MagicMock()
         mock_regular_container.name = "container"
@@ -431,13 +431,41 @@ class TestKillContainer:
         containers = [mock_regular_container, mock_test_container]
 
         with patch('neurons.Miner.container.get_docker', return_value=(client, containers)):
-            result = kill_container()
+            result = kill_container(deregister=False)
             mock_test_container.exec_run.assert_called_once_with(cmd="kill -15 1")
             mock_test_container.wait.assert_called_once()
             mock_test_container.remove.assert_called_once()
             mock_regular_container.exec_run.assert_not_called()
             mock_regular_container.wait.assert_not_called()
             mock_regular_container.remove.assert_not_called()
+            client.images.prune.assert_called_once_with(filters={"dangling": True})
+            assert result is True
+
+    def test_kill_container_deregister_true_with_both_containers(self):
+        """
+        kill_container:
+        When deregister=True, looks for and removes both test and regular containers.
+        """
+        mock_regular_container = MagicMock()
+        mock_regular_container.name = "container"
+        mock_regular_container.status = "running"
+
+        mock_test_container = MagicMock()
+        mock_test_container.name = "test_container"
+        mock_test_container.status = "running"
+
+        client = MagicMock()
+        client.images.prune = MagicMock()
+        containers = [mock_regular_container, mock_test_container]
+
+        with patch('neurons.Miner.container.get_docker', return_value=(client, containers)):
+            result = kill_container(deregister=True)
+            mock_test_container.exec_run.assert_called_once_with(cmd="kill -15 1")
+            mock_test_container.wait.assert_called_once()
+            mock_test_container.remove.assert_called_once()
+            mock_regular_container.exec_run.assert_called_once_with(cmd="kill -15 1")
+            mock_regular_container.wait.assert_called_once()
+            mock_regular_container.remove.assert_called_once()
             client.images.prune.assert_called_once_with(filters={"dangling": True})
             assert result is True
 
