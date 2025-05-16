@@ -936,7 +936,7 @@ class Validator:
             device_requirement["gpu"] = {"count": 1, "capacity": 0, "type": ""}
 
             docker_requirement = {
-                "base_image": "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime",
+                "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
             }
             async with self.dendrite as dendrite:
                 # Simulate an allocation query with Allocate
