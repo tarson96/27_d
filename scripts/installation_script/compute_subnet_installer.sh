@@ -28,48 +28,8 @@ if [[ "$#" -gt 0 ]]; then
   fi
 fi
 
-# Temporary needrestart configuration
-TEMP_NEEDRESTART_CONF="/tmp/needrestart-temp.conf"
-TEMP_NEEDRESTART_DIR="/etc/needrestart/conf.d/99-temp.conf"
-
-# Function to clean up temporary configuration
-cleanup() {
-    echo "Cleaning up temporary needrestart configuration..."
-    if [ -f "$TEMP_NEEDRESTART_DIR" ]; then
-        sudo rm -f "$TEMP_NEEDRESTART_DIR"
-    fi
-    if [ -f "$TEMP_NEEDRESTART_CONF" ]; then
-        sudo rm -f "$TEMP_NEEDRESTART_CONF"
-    fi
-}
-
-# Configure needrestart temporarily
-setup_needrestart() {
-    echo "Setting up temporary needrestart configuration..."
-    sudo bash -c 'echo "\$nrconf{restart} = '\''a'\'';" > '"$TEMP_NEEDRESTART_CONF"
-    sudo bash -c 'echo "\$nrconf{override_rc} = 0;" >> '"$TEMP_NEEDRESTART_CONF"
-    sudo bash -c 'echo "\$nrconf{restart} = '\''a'\'';" > '"$TEMP_NEEDRESTART_DIR"
-}
-
-# Register cleanup function to run when script exits
-trap cleanup EXIT INT TERM
-
-# Set up needrestart at startup
-setup_needrestart
-
-# Function to run apt-get with non-interactive configuration
-run_apt_get() {
-  DEBIAN_FRONTEND=noninteractive sudo -E apt-get "$@"
-}
-
-# Function to run apt-get install with non-interactive configuration
-install_package() {
-  DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "$@"
-}
-
 abort() {
   echo "ERROR: $1" >&2
-  cleanup  # Ensure cleanup on error
   exit 1
 }
 
@@ -109,44 +69,21 @@ else
   HOME_DIR="$(eval echo "~$REAL_USER")"
 fi
 
+# Definir el directorio del entorno virtual
+VENV_DIR="${HOME_DIR}/venv"
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+  source "${VENV_DIR}/bin/activate"
+fi
 
+##############################################################################
+#                      2) Check / Install Docker
+##############################################################################
 docker_installed() {
   if command -v docker >/dev/null 2>&1; then
     return 0
   fi
   return 1
 }
-
-if docker_installed; then
-  info "Docker is installed. Verifying permissions..."
-  if $AUTOMATED; then
-    info "In automated mode, ensuring Docker permissions..."
-    if [ "$USER_NAME" = "ubuntu" ]; then
-      info "Configuring Docker permissions for ubuntu user..."
-      sudo usermod -aG docker "$USER_NAME"
-      sudo chown root:docker /var/run/docker.sock
-      sudo chmod 660 /var/run/docker.sock
-      newgrp docker
-    fi
-  else
-    if ! groups "$USER_NAME" | grep -q docker; then
-      info "Adding user $USER_NAME to docker group..."
-      sudo usermod -aG docker "$USER_NAME"
-      info "Please log out and log back in for the changes to take effect."
-      info "Or run: newgrp docker"
-      read -rp "Press ENTER to continue with 'newgrp docker' or Ctrl+C to abort..."
-      newgrp docker
-    else
-      info "User $USER_NAME already has Docker permissions."
-    fi
-  fi
-fi
-
-# Define virtual environment directory
-VENV_DIR="${HOME_DIR}/venv"
-if [ -f "${VENV_DIR}/bin/activate" ]; then
-  source "${VENV_DIR}/bin/activate"
-fi
 
 ##############################################################################
 #                      3) Check / Install NVIDIA Docker
@@ -225,8 +162,8 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
   else
     info "Installing Docker..."
 
-    run_apt_get update || abort "Failed to update package lists."
-    install_package apt-utils curl git cmake build-essential ca-certificates || abort "Failed to install basic prerequisites."
+    sudo apt-get update || abort "Failed to update package lists."
+    sudo apt-get install --no-install-recommends --no-install-suggests -y apt-utils curl git cmake build-essential ca-certificates || abort "Failed to install basic prerequisites."
 
     # Set up Docker repository
     info "Setting up Docker repository..."
@@ -238,8 +175,8 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     DOCKER_REPO="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable"
     echo "$DOCKER_REPO" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-    run_apt_get update || abort "Failed to update package lists for Docker."
-    install_package docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || abort "Failed to install Docker packages."
+    sudo apt-get update || abort "Failed to update package lists for Docker."
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || abort "Failed to install Docker packages."
 
     info "Adding user ${USER_NAME} to 'docker' group..."
     sudo usermod -aG docker "$USER_NAME" || abort "Failed to add user to docker group."
@@ -247,6 +184,9 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     info "Docker installed successfully."
     NEED_REBOOT=1
   fi
+
+  # 'at' package might be used for scheduled reboots if needed
+  sudo apt-get install -y at || abort "Failed to install package 'at'."
 
   if nvidia_docker_installed; then
     info "NVIDIA Docker support (nvidia-container-toolkit) is already installed. Skipping."
@@ -261,8 +201,8 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
       | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
       | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-    run_apt_get update || abort "Failed to update apt after adding NVIDIA repository."
-    install_package nvidia-container-toolkit || abort "Failed to install nvidia-container-toolkit."
+    sudo apt-get update || abort "Failed to update apt after adding NVIDIA repository."
+    sudo apt-get install -y nvidia-container-toolkit || abort "Failed to install nvidia-container-toolkit."
 
     info "Configuring Docker to use NVIDIA Container Runtime..."
     sudo nvidia-ctk runtime configure --runtime=docker || abort "Failed to configure NVIDIA Container Runtime."
@@ -286,26 +226,26 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     . /etc/os-release || abort "Cannot determine Ubuntu version."
     if [[ "$VERSION_CODENAME" == "jammy" ]]; then
       # Ubuntu 22.04
-      run_apt_get update
-      install_package build-essential dkms linux-headers-$(uname -r) || abort "Failed to install build essentials."
+      sudo apt-get update
+      sudo apt-get install -y build-essential dkms linux-headers-$(uname -r) || abort "Failed to install build essentials."
       wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin -O /tmp/cuda.pin || abort "Failed to download cuda pin file."
       sudo mv /tmp/cuda.pin /etc/apt/preferences.d/cuda-repository-pin-600
       wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda-repo-ubuntu2204-12-8-local_12.8.0-570.86.10-1_amd64.deb -O /tmp/cuda-repo.deb || abort "Failed to download cuda repo .deb."
       sudo dpkg -i /tmp/cuda-repo.deb || abort "dpkg install of cuda repo failed."
       sudo cp /var/cuda-repo-ubuntu2204-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/ || abort "Failed to copy cuda keyring."
-      run_apt_get update
-      install_package cuda-toolkit-12-8 cuda-drivers || abort "Failed to install CUDA Toolkit and drivers."
+      sudo apt-get update
+      sudo apt-get -y install cuda-toolkit-12-8 cuda-drivers || abort "Failed to install CUDA Toolkit and drivers."
     elif [[ "$VERSION_CODENAME" == "lunar" ]]; then
       # For Ubuntu 23.04/24.04 if they use codename "lunar"
-      run_apt_get update
-      install_package build-essential dkms linux-headers-$(uname -r) || abort "Failed to install build essentials."
+      sudo apt-get update
+      sudo apt-get install -y build-essential dkms linux-headers-$(uname -r) || abort "Failed to install build essentials."
       wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-ubuntu2404.pin -O /tmp/cuda.pin || abort "Failed to download cuda pin file (24.04)."
       sudo mv /tmp/cuda.pin /etc/apt/preferences.d/cuda-repository-pin-600
       wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda-repo-ubuntu2404-12-8-local_12.8.0-570.86.10-1_amd64.deb -O /tmp/cuda-repo.deb || abort "Failed to download cuda repo .deb (24.04)."
       sudo dpkg -i /tmp/cuda-repo.deb || abort "dpkg install of cuda repo failed (24.04)."
       sudo cp /var/cuda-repo-ubuntu2404-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/ || abort "Failed to copy cuda keyring (24.04)."
-      run_apt_get update
-      install_package cuda-toolkit-12-8 cuda-drivers || abort "Failed to install CUDA Toolkit 12.8."
+      sudo apt-get update
+      sudo apt-get -y install cuda-toolkit-12-8 cuda-drivers || abort "Failed to install CUDA Toolkit 12.8."
     else
       info "Automatic CUDA 12.8 installation is not supported for this Ubuntu version."
       info "Please install CUDA manually from: https://developer.nvidia.com/cuda-downloads"
@@ -338,14 +278,7 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
 
   # Check if we're already inside a Git repo
   if $AUTOMATED; then
-    echo "AUTOMATED mode detected. Setting up compute-subnet..."
-    if [ ! -d "/home/ubuntu/compute-subnet" ]; then
-      echo "Cloning compute-subnet repository..."
-      git clone "$COMPUTE_SUBNET_GIT" /home/ubuntu/compute-subnet || {
-        echo "ERROR: Failed to clone compute-subnet repository."
-        exit 1
-      }
-    fi
+    echo "AUTOMATED mode detected. Changing directory to /home/ubuntu/compute-subnet..."
     cd /home/ubuntu/compute-subnet || {
       echo "ERROR: Failed to change directory to /home/ubuntu/compute-subnet."
       exit 1
@@ -434,8 +367,8 @@ EOF
       if ! python3 -m ensurepip --version > /dev/null 2>&1; then
         info "ensurepip not available. Installing python-venv..."
         py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        run_apt_get update || abort "Failed to update package lists."
-        install_package python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
+        sudo apt-get update || abort "Failed to update package lists."
+        sudo apt-get install -y python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
       fi
       python3 -m venv "$VENV_DIR" || abort "Failed to create virtual environment."
       info "Activating virtual environment..."
@@ -444,8 +377,8 @@ EOF
   fi
 
   info "Updating system packages for compute-subnet dependencies..."
-  run_apt_get update || abort "Failed to update package lists."
-  install_package python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) at || abort "Failed to install required packages."
+  sudo apt-get update || abort "Failed to update package lists."
+  sudo apt-get install -y python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) || abort "Failed to install required packages."
 
   info "Upgrading pip in the virtual environment..."
   pip install --upgrade pip || abort "Failed to upgrade pip."
@@ -470,16 +403,16 @@ EOF
   fi
 
   info "Installing OpenCL libraries..."
-  install_package ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
+  sudo apt-get install -y ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
 
   info "Installing Node.js, npm and PM2..."
-  run_apt_get update
+  sudo apt-get update
 
-  install_package curl
+  sudo apt-get install -y curl
 
   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 
-  install_package nodejs || abort "Failed to install Node.js."
+  sudo apt-get install -y nodejs || abort "Failed to install Node.js."
 
   node -v
 
@@ -608,15 +541,13 @@ info "Components already installed, proceeding with miner creation..."
 #                      9) Configure firewall (UFW)
 ##############################################################################
 info "Installing and configuring UFW..."
-install_package ufw || abort "Failed to install ufw."
+sudo apt-get install -y ufw || abort "Failed to install ufw."
 info "Allowing SSH (22) in UFW..."
 sudo ufw allow 22/tcp
 info "Allowing validator port 4444 in UFW..."
 sudo ufw allow 4444/tcp
-info "Allowing port 27015 in UFW..."
-sudo ufw allow 27015/tcp
 
-
+# Decide netuid, network, axon port
 if $AUTOMATED; then
   NETUID="${NETUID:-15}"
   if [[ "$NETUID" -eq 27 ]]; then
@@ -660,7 +591,7 @@ info "UFW is enabled. Allowed ports: 22 (SSH), 4444 (validator), ${AXON_PORT} (A
 #                      10) WANDB configuration
 ##############################################################################
 
-# Verify and set CS_PATH if not defined
+# Verificar y establecer CS_PATH si no está definido
 if [ -z "${CS_PATH:-}" ]; then
   if $AUTOMATED; then
     if [ -f "/home/ubuntu/compute-subnet/setup.py" ] || [ -f "/home/ubuntu/compute-subnet/pyproject.toml" ]; then
@@ -716,7 +647,7 @@ inject_wandb_env() {
     info "WANDB_API_KEY is empty, leaving .env as is."
   fi
 
-  # Configure SQLITE_DB_PATH
+  # Configurar SQLITE_DB_PATH
   info "Configuring SQLITE_DB_PATH in .env"
   sed -i "s@^SQLITE_DB_PATH=.*@SQLITE_DB_PATH=\"${CS_PATH}/database.db\"@" "$env_path" 2>/dev/null \
     || info "Note: Could not update SQLITE_DB_PATH line in .env (it might not exist)."
@@ -737,7 +668,7 @@ inject_wandb_env
 #                      11) PM2 miner launch
 ##############################################################################
 
-# Ensure VENV_DIR is defined
+# Asegurarnos de que VENV_DIR esté definido
 VENV_DIR="${HOME_DIR}/venv"
 
 if [ ! -f "${CS_PATH}/neurons/miner.py" ]; then
