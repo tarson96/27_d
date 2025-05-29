@@ -121,13 +121,12 @@ if docker_installed; then
   info "Docker is installed. Verifying permissions..."
   if $AUTOMATED; then
     info "In automated mode, ensuring Docker permissions..."
-    if [ "$USER_NAME" = "ubuntu" ]; then
-      info "Configuring Docker permissions for ubuntu user..."
-      sudo usermod -aG docker "$USER_NAME"
-      sudo chown root:docker /var/run/docker.sock
-      sudo chmod 660 /var/run/docker.sock
-      newgrp docker
-    fi
+    info "Configuring Docker permissions for ubuntu user in automated mode..."
+    sudo usermod -aG docker ubuntu
+    sudo chown root:docker /var/run/docker.sock
+    sudo chmod 666 /var/run/docker.sock
+    sudo setfacl -m user:ubuntu:rw /var/run/docker.sock
+    sudo systemctl restart docker
   else
     if ! groups "$USER_NAME" | grep -q docker; then
       info "Adding user $USER_NAME to docker group..."
