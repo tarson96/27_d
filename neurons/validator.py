@@ -16,7 +16,6 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-import ast
 import asyncio
 import base64
 import json
@@ -24,21 +23,17 @@ import os
 import random
 import threading
 import traceback
-import hashlib
+import uuid
 import numpy as np
-import yaml
-import multiprocessing
 from asyncio import AbstractEventLoop
 from typing import Dict, Tuple, List
 
 import bittensor as bt
-import math
 import time
 import paramiko
 
-import cryptography
+from compute.pubsub.message_types import TOPICS
 import torch
-from cryptography.fernet import Fernet
 from torch._C._te import Tensor # type: ignore
 import RSAEncryption as rsa
 import concurrent.futures
@@ -51,21 +46,41 @@ from compute import (
     __version_as_int__,
     validator_permit_stake,
     weights_rate_limit
-    )
+)
 from compute.axon import ComputeSubnetSubtensor
-from compute.protocol import Allocate, Challenge, Specs
+from compute.protocol import Allocate
+from compute.pubsub import ValidatorGatewayPubSubClient, MessageFactory
 from compute.utils.db import ComputeDb
-from compute.utils.math import percent, force_to_float_or_default
+from compute.utils.math import percent
 from compute.utils.parser import ComputeArgPaser
 from compute.utils.subtensor import is_registered, get_current_block, calculate_next_block_time
 from compute.utils.version import try_update, get_local_version, version2number, get_remote_version
 from compute.wandb.wandb import ComputeWandb
 from neurons.Validator.calculate_pow_score import calc_score_pog
-from neurons.Validator.database.allocate import update_miner_details, select_has_docker_miners_hotkey, get_miner_details
-from neurons.Validator.database.challenge import select_challenge_stats, update_challenge_details
+from neurons.Validator.database.allocate import update_miner_details, get_miner_details
 from neurons.Validator.database.miner import select_miners, purge_miner_entries, update_miners
-from neurons.Validator.pog import adjust_matrix_size, compute_script_hash, execute_script_on_miner, get_random_seeds, load_yaml_config, parse_merkle_output, receive_responses, send_challenge_indices, send_script_and_request_hash, parse_benchmark_output, identify_gpu, send_seeds, verify_merkle_proof_row, get_remote_gpu_info, verify_responses
-from neurons.Validator.database.pog import get_pog_specs, retrieve_stats, update_pog_stats, write_stats
+from neurons.Validator.pog import (
+    adjust_matrix_size,
+    compute_script_hash,
+    execute_script_on_miner,
+    get_random_seeds,
+    load_yaml_config,
+    parse_merkle_output,
+    receive_responses,
+    send_challenge_indices,
+    send_script_and_request_hash,
+    parse_benchmark_output,
+    identify_gpu,
+    send_seeds,
+    get_remote_gpu_info,
+    verify_responses,
+)
+from neurons.Validator.database.pog import (
+    get_pog_specs,
+    retrieve_stats,
+    update_pog_stats,
+    write_stats,
+)
 
 class Validator:
     blocks_done: set = set()
@@ -166,6 +181,19 @@ class Validator:
         # The metagraph holds the state of the network, letting us know about other miners.
         self._metagraph = self.subtensor.metagraph(self.config.netuid)
         bt.logging.info(f"Metagraph: {self.metagraph}")
+
+        self.pubsub_client = ValidatorGatewayPubSubClient(
+            wallet=self.wallet,
+            config=self.config,
+            timeout=30.0,
+            auto_refresh_interval=600  # 30 minutes
+        )
+        self.message_factory = MessageFactory(
+            validator_hotkey=self.wallet.hotkey.ss58_address
+        )
+
+        # Track known miners for discovery publishing
+        self.known_miners = set()
 
         # Initialize the local db
         self.db = ComputeDb()
@@ -554,16 +582,49 @@ class Validator:
     def get_valid_tensors(self, metagraph):
         tensors = []
         self.total_current_miners = 0
+        newly_discovered_miners = []
+
         for uid in metagraph.uids:
             neuron = metagraph.neurons[uid]
 
             if neuron.axon_info.ip != "0.0.0.0" and not self.is_blacklisted(neuron=neuron):
                 self.total_current_miners += 1
                 tensors.append(True)
+
+                # Check if this is a newly discovered miner
+                if neuron.hotkey not in self.known_miners:
+                    self.known_miners.add(neuron.hotkey)
+                    newly_discovered_miners.append(neuron)
             else:
                 tensors.append(False)
-
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        # Publish discovery messages for new miners
+        for neuron in newly_discovered_miners:
+            loop.run_until_complete(self._publish_miner_discovery_async(neuron))
         return tensors
+
+    async def _publish_miner_discovery_async(self, neuron):
+        """Helper method to publish miner discovery asynchronously."""
+        await self.publish_miner_discovery(
+            miner_hotkey=neuron.hotkey,
+            gpu_specs={
+                "model": "Unknown",  # Will be updated after POG test
+                "vram_gb": 0,
+                "cpu_cores": 0,
+                "ram_gb": 0
+            },
+            network_info={
+                "ip_address": neuron.axon_info.ip,
+                "port": neuron.axon_info.port,
+                "region": None
+            },
+            registration_block=self.current_block
+        )
+        bt.logging.info(f"Published miner discovery for newly detected miner: {neuron.hotkey}")
 
     def get_valid_queryable(self):
         valid_queryable = []
@@ -821,6 +882,8 @@ class Validator:
         miner_info = None
         host = None  # Initialize host variable
         hotkey = axon.hotkey
+        request_id = str(uuid.uuid4())
+        start_time = time.time()
         bt.logging.debug(f"{hotkey}: Starting miner test.")
 
         try:
@@ -844,6 +907,8 @@ class Validator:
             miner_info = allocation_response
             host = miner_info['host']
             bt.logging.debug(f"{hotkey}: Allocated Miner for testing.")
+
+
 
             # Step 2: Connect via SSH
             ssh_client = paramiko.SSHClient()
@@ -948,13 +1013,51 @@ class Validator:
             verification_passed = verify_responses(seeds, root_hashes, responses, indices, n)
             if verification_passed and timing_passed:
                 bt.logging.info(f"✅ {hotkey}: GPU Identification: Detected {num_gpus} x {gpu_name} GPU(s)")
+
+                # Publish successful POG result
+                validation_duration = time.time() - start_time
+                await self.publish_pog_result(
+                    miner_hotkey=hotkey,
+                    request_id=request_id,
+                    result="success",
+                    validation_duration=validation_duration,
+                    score=None,  # Add scoring logic if available
+                    benchmark_data={
+                        "gpu_utilization": 0.0,  # Add actual metrics if available
+                        "memory_usage": 0.0,
+                        "compute_performance": 0.0,
+                        "network_latency": 0.0
+                    }
+                )
+
                 return (hotkey, gpu_name, num_gpus)
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
+
+                # Publish failed POG result
+                validation_duration = time.time() - start_time
+                await self.publish_pog_result(
+                    miner_hotkey=hotkey,
+                    request_id=request_id,
+                    result="failure",
+                    validation_duration=validation_duration,
+                    error_details="Verification or timing failed"
+                )
+
                 return (hotkey, None, 0)
 
         except Exception as e:
             bt.logging.info(f"❌ {hotkey}: Error testing Miner: {e}", exc_info=True)
+
+            # Publish error POG result
+            validation_duration = time.time() - start_time
+            await self.publish_pog_result(
+                miner_hotkey=hotkey,
+                request_id=request_id,
+                result="error",
+                validation_duration=validation_duration,
+                error_details=str(e)
+            )
             return (hotkey, None, 0)
 
         finally:
@@ -978,6 +1081,23 @@ class Validator:
             docker_requirement = {
                 "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
             }
+
+            # Publish allocation request BEFORE making the actual request
+            try:
+                allocation_uuid = str(uuid.uuid4())
+                await self.publish_allocation_request(
+                    miner_hotkey=axon.hotkey,
+                    allocation_uuid=allocation_uuid,
+                    request_type="pog_test",
+                    device_requirements={
+                        "gpu_count": device_requirement["gpu"]["count"],
+                        "cpu_cores": device_requirement["cpu"]["count"],
+                        "ram_gb": device_requirement["ram"]["capacity"] // (1024**3),
+                        "storage_gb": device_requirement["hard_disk"]["capacity"] // (1024**3)
+                    }
+                )
+            except Exception as e:
+                bt.logging.error(f"Failed to publish allocation request for {axon.hotkey}: {e}")
             async with bt.dendrite(wallet=self.wallet) as dendrite:
                 # Simulate an allocation query with Allocate
                 check_allocation = await dendrite(
@@ -1011,6 +1131,7 @@ class Validator:
                             'username': info['username'],
                             'password': info['password'],
                         }
+
                         return miner_info
                     else:
                         if not response:
@@ -1254,6 +1375,21 @@ class Validator:
                         block_next_sync_status = self.current_block + 25  # ~ every 5 minutes
                         self.sync_status()
 
+                        # Publish validator status update
+                        active_validations = len(getattr(self, 'active_allocations', []))
+                        await self.publish_validator_status(
+                            status="online",
+                            version=str(__version_as_int__),
+                            active_validations=active_validations,
+                            last_sync_block=self.current_block
+                        )
+
+                        # Log queue status for monitoring
+                        if hasattr(self.pubsub_client, 'get_queue_status'):
+                            queue_status = self.pubsub_client.get_queue_status()
+                            if any(size > 0 for size in queue_status.values()):
+                                bt.logging.info(f"Pub/Sub queue status: {queue_status}")
+
                         # Log chain data to wandb
                         chain_data = {
                             "Block": self.current_block,
@@ -1273,6 +1409,11 @@ class Validator:
                         self.last_updated_block = self.current_block
                         self.blocks_done.clear()
                         self.blocks_done.add(self.current_block)
+
+                    # Refresh tokens periodically (every 30 minutes)
+                    if self.current_block % 600 == 0:  # Approximately every 30 minutes at 3s block time
+                        bt.logging.info("Refreshing validator-token-gateway tokens")
+                        self.pubsub_client.refresh_credentials()
 
                 bt.logging.info(
                     (
@@ -1300,6 +1441,185 @@ class Validator:
                 bt.logging.success("Keyboard interrupt detected. Exiting validator.")
                 exit()
 
+    def _handle_pubsub_message(self, message):
+        """
+        Handle received pubsub messages using structured approach.
+        """
+        try:
+            # Decode the message data
+            data = json.loads(message.data.decode("utf-8"))
+
+            # Process different message types
+            message_type = data.get("messageType")
+
+            if message_type == "gpu_allocation":
+                self._handle_gpu_allocation(data)
+            elif message_type == "gpu_deallocation":
+                self._handle_gpu_deallocation(data)
+            elif message_type == "system_version_release":
+                self._handle_system_update(data)
+            else:
+                bt.logging.info(f"Received unknown message type: {message_type}")
+
+            bt.logging.info(f"Processed Pub/Sub message: {data}")
+
+            # Acknowledge the message
+            message.ack()
+
+        except json.JSONDecodeError as e:
+            bt.logging.error(f"Invalid JSON in message: {e}")
+            message.nack()
+        except Exception as e:
+            bt.logging.error(f"Error processing message: {e}")
+            message.nack()
+
+    def _handle_gpu_allocation(self, data):
+        """Handle GPU allocation messages from backend."""
+        bt.logging.info(f"Processing GPU allocation: {data}")
+        # Add your GPU allocation logic here
+
+    def _handle_gpu_deallocation(self, data):
+        """Handle GPU deallocation messages from backend."""
+        bt.logging.info(f"Processing GPU deallocation: {data}")
+        # Add your GPU deallocation logic here
+
+    def _handle_system_update(self, data):
+        """Handle system update messages from backend."""
+        bt.logging.info(f"Processing system update: {data}")
+        # Add your system update logic here
+
+    # Publishing methods using the new structured approach
+    async def publish_miner_discovery(self, miner_hotkey: str, gpu_specs: dict, network_info: dict = None, registration_block: int = None):
+        """
+        Publish a miner discovery message.
+
+        Args:
+            miner_hotkey: The hotkey of the discovered miner
+            gpu_specs: GPU specifications dict
+            network_info: Optional network information dict
+            registration_block: Optional registration block number
+        """
+        try:
+            # Create miner discovery message
+            message = self.message_factory.create_miner_discovery(
+                miner_hotkey=miner_hotkey,
+                gpu_specs=gpu_specs,
+                network_info=network_info,
+                registration_block=registration_block or self.current_block
+            )
+
+            # Publish to miner events topic
+            message_id = await self.pubsub_client.publish_to_miner_events(message)
+
+            if message_id:
+                bt.logging.info(f"Published miner discovery for {miner_hotkey}, message ID: {message_id}")
+
+        except Exception as e:
+            bt.logging.error(f"Failed to publish miner discovery: {e}")
+
+    async def publish_pog_result(self, miner_hotkey: str, request_id: str,
+                                result: str, validation_duration: float,
+                                score: float = None, benchmark_data: dict = None):
+        """
+        Publish a PoG validation result.
+
+        Args:
+            miner_hotkey: The validated miner's hotkey
+            request_id: The PoG request ID
+            result: Validation result ("success", "failure", "timeout", "error")
+            validation_duration: Duration of validation in seconds
+            score: Optional validation score
+            benchmark_data: Optional benchmark data
+        """
+        try:
+            # Create PoG result message
+            message = self.message_factory.create_pog_result(
+                miner_hotkey=miner_hotkey,
+                request_id=request_id,
+                result=result,
+                validation_duration_seconds=validation_duration,
+                score=score,
+                benchmark_data=benchmark_data
+            )
+
+            # Publish to validation events topic
+            message_id = await self.pubsub_client.publish_to_validation_events(message)
+
+            if message_id:
+                bt.logging.info(f"Published PoG result for {miner_hotkey}, message ID: {message_id}")
+
+        except Exception as e:
+            bt.logging.error(f"Failed to publish PoG result: {e}")
+
+    async def publish_validator_status(self, status: str, version: str,
+                                     active_validations: int, last_sync_block: int = None):
+        """
+        Publish validator status update.
+
+        Args:
+            status: Validator status ("online", "offline", "maintenance", "syncing")
+            version: Current validator version
+            active_validations: Number of active validations
+            last_sync_block: Last synced block number
+        """
+        try:
+            # Create validator status message
+            message = self.message_factory.create_validator_status(
+                status=status,
+                version=version,
+                active_validations=active_validations,
+                last_sync_block=last_sync_block or self.current_block
+            )
+
+            # Publish to system events topic
+            await self.pubsub_client.publish_to_system_events(message)
+
+        except Exception as e:
+            bt.logging.error(f"Failed to publish validator status: {e}")
+
+    async def publish_allocation_request(self, miner_hotkey: str, allocation_uuid: str,
+                                       request_type: str = "pog_test",
+                                       device_requirements: dict = None,
+                                       expected_duration_minutes: int = 10):
+        """
+        Publish allocation request message.
+
+        Args:
+            miner_hotkey: Target miner's hotkey
+            allocation_uuid: Unique allocation identifier
+            request_type: Type of allocation request
+            device_requirements: Required device specifications
+            expected_duration_minutes: Expected allocation duration
+        """
+        try:
+            # Create allocation request message
+            message = self.message_factory.create_allocation_request(
+                miner_hotkey=miner_hotkey,
+                allocation_uuid=allocation_uuid,
+                request_type=request_type,
+                device_requirements=device_requirements,
+                expected_duration_minutes=expected_duration_minutes
+            )
+
+            # Publish to allocation events topic
+            message_id = await self.pubsub_client.publish_to_allocation_events(message)
+
+            if message_id:
+                bt.logging.info(f"Published allocation request for {miner_hotkey}, message ID: {message_id}")
+
+        except Exception as e:
+            bt.logging.error(f"Failed to publish allocation request: {e}")
+
+
+
+    async def pubsub_loop(self):
+        """Start pubsub subscription using structured client"""
+        # only subscribe to allocation events for now
+        self.pubsub_client.set_message_callback(
+            TOPICS.ALLOCATION_EVENTS,
+            self._handle_pubsub_message,
+        )
+        await self.pubsub_client.subscribe_to_messages_topic(TOPICS.ALLOCATION_EVENTS)
 
 def main():
     """
@@ -1309,6 +1629,7 @@ def main():
     with the Bittensor network.
     """
     validator = Validator()
+    asyncio.run(validator.pubsub_loop())
     asyncio.run(validator.start())
 
 
