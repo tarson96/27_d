@@ -131,10 +131,11 @@ if docker_installed; then
     if ! groups "$USER_NAME" | grep -q docker; then
       info "Adding user $USER_NAME to docker group..."
       sudo usermod -aG docker "$USER_NAME"
-      info "Please log out and log back in for the changes to take effect."
-      info "Or run: newgrp docker"
-      read -rp "Press ENTER to continue with 'newgrp docker' or Ctrl+C to abort..."
-      newgrp docker
+      sudo chown root:docker /var/run/docker.sock
+      sudo chmod 660 /var/run/docker.sock
+      sudo setfacl -m user:$USER_NAME:rw /var/run/docker.sock
+      info "Docker permissions configured for $USER_NAME."
+      info "⚠️ Please log out and log back in, or reboot, to apply group membership."
     else
       info "User $USER_NAME already has Docker permissions."
     fi
@@ -294,7 +295,7 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
       sudo cp /var/cuda-repo-ubuntu2204-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/ || abort "Failed to copy cuda keyring."
       run_apt_get update
       install_package cuda-toolkit-12-8 cuda-drivers || abort "Failed to install CUDA Toolkit and drivers."
-    elif [[ "$VERSION_CODENAME" == "lunar" ]]; then
+    elif [[ "$VERSION_CODENAME" == "lunar" || "$VERSION_CODENAME" == "noble" ]]; then
       # For Ubuntu 23.04/24.04 if they use codename "lunar"
       run_apt_get update
       install_package build-essential dkms linux-headers-$(uname -r) || abort "Failed to install build essentials."
