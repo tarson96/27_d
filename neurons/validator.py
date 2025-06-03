@@ -328,6 +328,26 @@ class Validator:
         # Calculate score
         for uid in self.uids:
             try:
+                if uid not in self._queryable_uids:
+                    hotkey = self.metagraph.axons[uid].hotkey
+                    self.stats[uid] = {
+                        "hotkey": hotkey,
+                        "allocated": hotkey in self.allocated_hotkeys,
+                        "own_score": True,
+                        "score": 0,
+                        "gpu_specs": None,
+                        "reliability_score": 0.0
+                        }
+                    self.scores[uid] = 0
+
+                    # Remove entry from PoG stats
+                    cursor = self.db.get_cursor()
+                    cursor.execute(
+                        "DELETE FROM pog_stats WHERE hotkey = ?",
+                        (hotkey,),
+                    )
+                    continue  # Skip further processing for this uid
+
                 axon = self._queryable_uids[uid]
                 hotkey = axon.hotkey
 
@@ -349,20 +369,27 @@ class Validator:
                 else:
                     # If not found locally, try fallback from stats_allocated
                     if uid in self.stats_allocated:
-                        score = self.stats_allocated[uid].get("score", 0)/100
-                        gpu_specs = self.stats_allocated[uid].get("gpu_specs", None)
-                        self.stats[uid]["own_score"] = False  # or "no"
+                        if isinstance(self.stats_allocated[uid].get("gpu_specs", None), dict):
+                            gpu_specs = self.stats_allocated[uid].get("gpu_specs", None)
+                            score = self.stats_allocated[uid].get("score", 0)
+                            self.stats[uid]["own_score"] = False
+                        else:
+                            gpu_specs = None
+                            score = 0
+                            self.stats[uid]["own_score"] = True
                     else:
                         score = 0
-                        self.stats[uid]["own_score"] = True  # or "no"
+                        gpu_specs = None
+                        self.stats[uid]["own_score"] = True
 
                 if hotkey in self.penalized_hotkeys:
                     score = 0
                 self.stats[uid]["score"] = score*100
                 self.stats[uid]["gpu_specs"] = gpu_specs
+
                 # Keep or override reliability_score if you want
                 if "reliability_score" not in self.stats[uid]:
-                    self.stats[uid]["reliability_score"] = 0
+                    self.stats[uid]["reliability_score"] = 0.0
 
             except KeyError as e:
                 bt.logging.trace(f"KeyError occurred for UID {uid}: {str(e)}")
@@ -936,7 +963,7 @@ class Validator:
             device_requirement["gpu"] = {"count": 1, "capacity": 0, "type": ""}
 
             docker_requirement = {
-                "base_image": "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime",
+                "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
             }
             async with self.dendrite as dendrite:
                 # Simulate an allocation query with Allocate
