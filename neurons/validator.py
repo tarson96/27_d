@@ -207,8 +207,6 @@ class Validator:
         self.lock = threading.Lock()
         self.threads: List[threading.Thread] = []
 
-        self.dendrite = bt.dendrite(wallet=self.wallet)
-
     @staticmethod
     def init_config():
         """
@@ -965,7 +963,7 @@ class Validator:
             docker_requirement = {
                 "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
             }
-            async with self.dendrite as dendrite:
+            async with bt.dendrite(wallet=self.wallet) as dendrite:
                 # Simulate an allocation query with Allocate
                 check_allocation = await dendrite(
                     axon,
@@ -1045,7 +1043,7 @@ class Validator:
 
             while allocation_status and retry_count < max_retries:
                 try:
-                    async with self.dendrite as dendrite:
+                    async with bt.dendrite(wallet=self.wallet) as dendrite:
                         # Send deallocation query
                         deregister_response = await dendrite(
                             axon,
