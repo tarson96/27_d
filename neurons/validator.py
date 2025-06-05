@@ -968,7 +968,7 @@ class Validator:
                 check_allocation = await dendrite(
                     axon,
                     Allocate(timeline=1, device_requirement=device_requirement, checking=True),
-                    timeout=5,
+                    timeout=15,
                     )
                 if check_allocation and check_allocation ["status"] is True:
                     response = await dendrite(
