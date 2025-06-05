@@ -968,7 +968,7 @@ class Validator:
                 check_allocation = await dendrite(
                     axon,
                     Allocate(timeline=1, device_requirement=device_requirement, checking=True),
-                    timeout=30,
+                    timeout=5,
                     )
                 if check_allocation and check_allocation ["status"] is True:
                     response = await dendrite(
@@ -980,7 +980,7 @@ class Validator:
                             public_key=public_key,
                             docker_requirement=docker_requirement,
                         ),
-                        timeout=30,
+                        timeout=60,
                     )
                     if response and response.get("status") is True:
                         bt.logging.trace(f"Successfully allocated miner {axon.hotkey}")
@@ -1052,7 +1052,7 @@ class Validator:
                                 checking=False,
                                 public_key=public_key,
                             ),
-                            timeout=60,
+                            timeout=15,
                         )
 
                         if deregister_response and deregister_response.get("status") is True:
