@@ -498,6 +498,8 @@ class Validator:
             if ip_address not in valid_ip_addresses:
                 valid_ip_addresses.add(ip_address)
                 dict_filtered_axons[uid] = axon
+            else:
+                bt.logging.debug(f"Skipping duplicated IP UID: {uid}")
 
         return dict_filtered_axons
 
@@ -512,6 +514,8 @@ class Validator:
         for uid, axon in dict_filtered_axons.items():
             if latest_version and latest_version <= axon.version:
                 dict_filtered_axons_version[uid] = axon
+            else:
+                bt.logging.debug(f"Skipping outdated version UID: {uid}")
         return dict_filtered_axons_version
 
     def is_blacklisted(self, neuron: bt.NeuronInfoLite):
@@ -559,12 +563,19 @@ class Validator:
 
     def get_valid_queryable(self):
         valid_queryable = []
+        bt.logging.trace(f"All UIDs before filtering: {self.uids}")
         for uid in self.uids:
             neuron: bt.NeuronInfoLite = self.metagraph.neurons[uid]
             axon = self.metagraph.axons[uid]
 
             if neuron.axon_info.ip != "0.0.0.0" and not self.is_blacklisted(neuron=neuron):
                 valid_queryable.append((uid, axon))
+            elif self.is_blacklisted(neuron=neuron):
+                bt.logging.debug(f"Skipping blacklisted UID: {uid}")
+            else:
+                bt.logging.debug(f"Skipping inactive UID: {uid}")
+
+        bt.logging.trace(f"Valid UIDs after filtering: {[uid for uid, _ in valid_queryable]}")
 
         return valid_queryable
 
