@@ -935,11 +935,11 @@ class Validator:
                 bt.logging.info(f"✅ {hotkey}: GPU Identification: Detected {num_gpus} x {gpu_name} GPU(s)")
                 return (hotkey, gpu_name, num_gpus)
             else:
-                bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure")
+                bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
                 return (hotkey, None, 0)
 
         except Exception as e:
-            bt.logging.info(f"❌ {hotkey}: Error testing Miner: {e}")
+            bt.logging.info(f"❌ {hotkey}: Error testing Miner: {e}", exc_info=True)
             return (hotkey, None, 0)
 
         finally:
