@@ -1,15 +1,9 @@
 import pytest
-import requests
-import threading
-import time
 from unittest import mock
-from http.server import HTTPServer
-import socketserver
 
 from neurons.Validator.health_check_server import (
     HealthCheckHandler,
-    TimeoutHTTPServer,
-    create_health_check_server
+    TimeoutHTTPServer
 )
 
 

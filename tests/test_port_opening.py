@@ -1,7 +1,6 @@
 import pytest
 import base64
 from unittest import mock
-import time
 
 from compute.utils.parser import ComputeArgPaser
 from neurons.Miner.container import run_container, INTERNAL_USER_PORT

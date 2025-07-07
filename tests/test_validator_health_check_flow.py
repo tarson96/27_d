@@ -1,7 +1,5 @@
 import pytest
-import asyncio
 from unittest import mock
-import bittensor as bt
 
 from neurons.validator import Validator
 from neurons.Validator.health_check import perform_health_check
