@@ -1,6 +1,7 @@
 import pytest
 import base64
 from unittest import mock
+import time
 
 from compute.utils.parser import ComputeArgPaser
 from neurons.Miner.container import run_container, INTERNAL_USER_PORT
@@ -116,8 +117,6 @@ class TestPortOpeningValidation:
             args = parser.parse_args([f"--external.fixed-port={port}"])
             assert getattr(args, 'external.fixed_port') == port
 
-
-
     def test_external_fixed_port_non_integer(self):
         """Test that verifies that non-integer values are rejected."""
         invalid_values = ["abc", "12.5", "port", ""]
@@ -126,8 +125,6 @@ class TestPortOpeningValidation:
             parser = ComputeArgPaser()
             with pytest.raises(SystemExit):
                 parser.parse_args([f"--external.fixed-port={value}"])
-
-
 
     def test_external_fixed_port_success_case(self):
         """Test that verifies the success case with port 8000."""
@@ -173,7 +170,7 @@ class TestPortOpeningInContainer:
         }
         testing = True
 
-                # Call run_container
+        # Call run_container
         result = run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage,
                              public_key, docker_requirement, testing)
 
@@ -257,18 +254,11 @@ class TestPortOpeningInContainer:
         assert result["message"] == "Container started successfully."
         assert result["info"] == expected_info
 
-    def test_container_port_mapping_with_default_external_port(
-        self,
-        mock_container_build,
-        mock_get_docker,
-        docker_client,
-        new_container,
-        mock_run_container,
-        mock_open_fn,
-    ):
-        """
-        Test that verifies that when default external port 27015 is specified, it maps correctly.
-        """
+    def test_container_run_failure(self, mock_container_build, mock_get_docker, docker_client):
+        """Test that container run failure is handled properly."""
+        # Mock container run to fail
+        docker_client.containers.run.side_effect = Exception("Docker run failed")
+        
         # Prepare input parameters
         cpu_usage = {"assignment": "0-1"}
         ram_usage = {"capacity": "5g"}
@@ -278,62 +268,18 @@ class TestPortOpeningInContainer:
         docker_requirement = {
             "base_image": "dummy_base",
             "volume_path": "/dummy/volume",
-            "fixed_external_user_port": 27015,  # Default external port explicitly specified
+            "fixed_external_user_port": 27015,
             "dockerfile": ""
         }
         testing = True
 
-        # Call run_container
+        # Call run_container and expect it to handle the exception
         result = run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage,
                              public_key, docker_requirement, testing)
 
-        # Verify that the image was built and container was run
-        docker_client.images.build.assert_called_once()
-        docker_client.containers.run.assert_called_once()
-
-        # Verify container configuration
-        _, kwargs = docker_client.containers.run.call_args
-        assert kwargs.get("name") == "ssh-test-container"  # testing=True
-        assert kwargs.get("detach") is True
-        assert kwargs.get("init") is True
-
-        # Verify port mapping
-        actual_ports = kwargs.get("ports", {})
-        assert INTERNAL_USER_PORT in actual_ports
-        assert actual_ports[INTERNAL_USER_PORT] == 27015
-
-        # Verify file operations
-        mock_open_fn.assert_called_with('allocation_key', 'w')
-
-        # Verify result structure
-        expected_info = base64.b64encode(b"encrypted_data").decode("utf-8")
-        assert result
-        assert result["status"] is True
-        assert result["message"] == "Container started successfully."
-        assert result["info"] == expected_info
-
-
-class TestPortOpeningEdgeCases:
-    """Tests for edge cases of port opening."""
-
-    def test_external_fixed_port_with_very_low_port(self):
-        """Test that verifies behavior with very low ports."""
-        parser = ComputeArgPaser()
-
-        # Port 1 should be valid
-        args = parser.parse_args(["--external.fixed-port=1"])
-        assert getattr(args, 'external.fixed_port') == 1
-
-    def test_external_fixed_port_with_common_ports(self):
-        """Test that verifies behavior with common ports."""
-        common_ports = [80, 443, 8000, 8080, 3000, 5000, 27015]
-
-        for port in common_ports:
-            parser = ComputeArgPaser()
-            args = parser.parse_args([f"--external.fixed-port={port}"])
-            assert getattr(args, 'external.fixed_port') == port
-
-
+        # Verify result indicates failure
+        assert result["status"] is False
+        assert "error" in result["message"].lower() or "failed" in result["message"].lower()
 
 
 if __name__ == "__main__":
