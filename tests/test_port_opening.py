@@ -257,7 +257,7 @@ class TestPortOpeningInContainer:
         """Test that container run failure is handled properly."""
         # Mock container run to fail
         docker_client.containers.run.side_effect = Exception("Docker run failed")
-        
+
         # Prepare input parameters
         cpu_usage = {"assignment": "0-1"}
         ram_usage = {"capacity": "5g"}
