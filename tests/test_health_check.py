@@ -1,5 +1,4 @@
 import pytest
-import requests
 from unittest import mock
 
 from neurons.Validator.health_check_server import (
