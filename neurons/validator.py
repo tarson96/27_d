@@ -798,28 +798,24 @@ class Validator:
 
     async def test_miner_gpu(self, axon, config_data):
         """
-        Allocate, test, and deallocate a single miner.
-
+        Allocate, test, and deallocate a single miner (Sybil-compatible).
         :return: Tuple of (miner_hotkey, gpu_name, num_gpus)
         """
         allocation_status = False
         miner_info = None
-        host = None  # Initialize host variable
+        host = None
         hotkey = axon.hotkey
+        public_key = None
         bt.logging.trace(f"{hotkey}: Starting miner test.")
 
         try:
-            # Step 0: Init
             gpu_data = config_data["gpu_performance"]
             gpu_tolerance_pairs = gpu_data.get("gpu_tolerance_pairs", {})
-            # Extract Merkle Proof Settings
             merkle_proof = config_data["merkle_proof"]
             time_tol = merkle_proof.get("time_tolerance",5)
-            # Extract miner_script path
             miner_script_path = merkle_proof["miner_script_path"]
 
             # Step 1: Allocate Miner
-            # Generate RSA key pair
             private_key, public_key = rsa.generate_key_pair()
             allocation_response = await self.allocate_miner(axon, private_key, public_key)
             if not allocation_response:
@@ -846,6 +842,8 @@ class Validator:
             bt.logging.trace(f"{hotkey}: [Step 1] Local script hash computed successfully.")
             bt.logging.trace(f"{hotkey}: Local Hash: {local_hash}")
             remote_hash = send_script_and_request_hash(ssh_client, miner_script_path)
+            bt.logging.trace(f"{hotkey}: [Step 1] Remote script hash received.")
+            bt.logging.trace(f"{hotkey}: Remote Hash: {remote_hash}")
             if local_hash != remote_hash:
                 bt.logging.info(f"{hotkey}: [Integrity Check] FAILURE: Hash mismatch detected.")
                 raise ValueError(f"{hotkey}: Script integrity verification failed.")
@@ -868,7 +866,7 @@ class Validator:
             bt.logging.trace(f"{hotkey}: [Step 5] Executing benchmarking mode on the miner...")
             execution_output = execute_script_on_miner(ssh_client, mode='benchmark')
             bt.logging.trace(f"{hotkey}: [Step 5] Benchmarking completed.")
-            # Parse the execution output
+            # Parse the execution output (Sybil compatible)
             num_gpus, vram, size_fp16, time_fp16, size_fp32, time_fp32 = parse_benchmark_output(execution_output)
             bt.logging.trace(f"{hotkey}: [Benchmark Results] Detected {num_gpus} GPU(s) with {vram} GB unfractured VRAM.")
             bt.logging.trace(f"{hotkey}: FP16 - Matrix Size: {size_fp16}, Execution Time: {time_fp16} s")
@@ -882,10 +880,9 @@ class Validator:
             gpu_name = identify_gpu(fp16_tflops, fp32_tflops, vram, gpu_data, gpu_name_reported, gpu_tolerance_pairs)
             bt.logging.trace(f"{hotkey}: [GPU Identification] Based on performance: {gpu_name}")
 
-            # Step 6: Run the Merkle proof mode
+            # Step 6: Run the Merkle proof mode (Sybil-compatible: n, 2n)
             bt.logging.trace(f"{hotkey}: [Step 6] Initiating Merkle Proof Mode.")
-            # Step 1: Send seeds and execute compute mode
-            n = adjust_matrix_size(vram, element_size=4, buffer_factor=0.10)
+            n = adjust_matrix_size(vram, element_size=4, buffer_factor=0.05)
             seeds = get_random_seeds(num_gpus)
             send_seeds(ssh_client, seeds, n)
             bt.logging.trace(f"{hotkey}: [Step 6] Compute mode executed on miner - Matrix Size: {n}")
@@ -894,19 +891,19 @@ class Validator:
             end_time = time.time()
             elapsed_time = end_time - start_time
             bt.logging.trace(f"{hotkey}: Compute mode execution time: {elapsed_time:.2f} seconds.")
-            # Parse the execution output
+            # Parse the execution output (Sybil compatible)
             root_hashes_list, gpu_timings_list = parse_merkle_output(execution_output)
             bt.logging.trace(f"{hotkey}: [Merkle Proof] Root hashes received from GPUs:")
             for gpu_id, root_hash in root_hashes_list:
-                bt.logging.trace(f"{hotkey}: GPU {{gpu_id}}: {{root_hash}}")
+                bt.logging.trace(f"{hotkey}: GPU {gpu_id}: {root_hash}")
 
             # Calculate total times
             total_multiplication_time = 0.0
             total_merkle_tree_time = 0.0
             num_gpus = len(gpu_timings_list)
             for _, timing in gpu_timings_list:
-                total_multiplication_time += timing.get('multiplication_time', 0.0)
-                total_merkle_tree_time += timing.get('merkle_tree_time', 0.0)
+                total_multiplication_time += timing.get('gemm', 0.0)
+                total_merkle_tree_time += timing.get('merkle', 0.0)
             average_multiplication_time = total_multiplication_time / num_gpus if num_gpus > 0 else 0.0
             average_merkle_tree_time = total_merkle_tree_time / num_gpus if num_gpus > 0 else 0.0
             bt.logging.trace(f"{hotkey}: Average Matrix Multiplication Time: {average_multiplication_time:.4f} seconds")
@@ -919,11 +916,11 @@ class Validator:
             # Step 7: Verify merkle proof
             root_hashes = {gpu_id: root_hash for gpu_id, root_hash in root_hashes_list}
             gpu_timings = {gpu_id: timing for gpu_id, timing in gpu_timings_list}
-            n = gpu_timings[0]['n']  # Assuming same n for all GPUs
+            n = gpu_timings[0]['n'] if 0 in gpu_timings else n
             indices = {}
             num_indices = 1
             for gpu_id in range(num_gpus):
-                indices[gpu_id] = [(np.random.randint(0, n), np.random.randint(0, n)) for _ in range(num_indices)]
+                indices[gpu_id] = [(np.random.randint(0, 2 * n), np.random.randint(0, n)) for _ in range(num_indices)]
             send_challenge_indices(ssh_client, indices)
             execution_output = execute_script_on_miner(ssh_client, mode='proof')
             bt.logging.trace(f"{hotkey}: [Merkle Proof] Proof mode executed on miner.")
@@ -937,14 +934,18 @@ class Validator:
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure")
                 return (hotkey, None, 0)
-
-        except Exception as e:
-            bt.logging.info(f"❌ {hotkey}: Error testing Miner: {e}")
-            return (hotkey, None, 0)
-
         finally:
-            if allocation_status and miner_info:
-                await self.deallocate_miner(axon, public_key)
+            try:
+                if ssh_client:
+                    ssh_client.close()
+            except Exception:
+                pass
+            try:
+                if allocation_status and miner_info:
+                    await self.deallocate_miner(axon, public_key)
+                    bt.logging.trace(f"{hotkey}: Miner de-allocated.")
+            except Exception as e:
+                bt.logging.info(f"{hotkey}: Miner de-allocation failed: {e}")
 
     async def allocate_miner(self, axon, private_key, public_key):
         """
