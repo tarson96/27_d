@@ -283,11 +283,17 @@ class Validator:
         self.blocks_per_epoch = subnet_config.get("blocks_per_epoch", 120)
         self.max_challenge_blocks = subnet_config.get("max_challenge_blocks", 10)
         self.rand_delay_blocks_max = subnet_config.get("rand_delay_blocks_max", 5)
+        self.allow_fake_sybil_slot = subnet_config.get("allow_fake_sybil_slot", False)
+
+        # Emission control
+        self.total_miner_emission = float(subnet_config.get("total_miner_emission", 0.0))
+        self.gpu_weights = subnet_config.get("gpu_weights", {})
 
         bt.logging.debug(f"🔧 Loaded subnet config:")
         bt.logging.debug(f"  blocks_per_epoch = {self.blocks_per_epoch}")
         bt.logging.debug(f"  max_challenge_blocks = {self.max_challenge_blocks}")
         bt.logging.debug(f"  rand_delay_blocks_max = {self.rand_delay_blocks_max}")
+        bt.logging.debug(f"  total_miner_emission = {self.total_miner_emission}")
 
     @staticmethod
     def pretty_print_dict_values(items: dict):
@@ -1169,6 +1175,136 @@ class Validator:
         else:
             bt.logging.error(f"❌ Failed to set burn weights: {result}")
 
+    def set_weight_capped_by_gpu(self):
+        """
+        Distribute emission weights to miners based on GPU type priorities (normalized),
+        capped by total_miner_emission. Remaining weight is burned.
+        """
+        try:
+            # Load config
+            subnet_config = self.config_data.get("subnet_config", {})
+            total_miner_emission = float(subnet_config.get("total_miner_emission", 0.0))
+            gpu_priorities = subnet_config.get("gpu_weights", {})
+
+            # Clamp emission
+            total_miner_emission = min(max(total_miner_emission, 0.0), 1.0)
+
+            # Prepare miner data
+            uid_to_gpu = {}
+            uid_to_score = {}
+            gpu_groups = {}
+
+            for uid in self.uids:
+                if uid not in self.stats:
+                    continue
+
+                stats_entry = self.stats[uid]
+                score = max(0.0, float(stats_entry.get("score", 0.0))) / 100.0
+
+                gpu_specs = stats_entry.get("gpu_specs", {})
+                if not isinstance(gpu_specs, dict):
+                    continue
+
+                gpu_name = gpu_specs.get("gpu_name", None)
+                if gpu_name is None or gpu_name not in gpu_priorities:
+                    continue
+
+                priority = gpu_priorities[gpu_name]
+                if priority <= 0:
+                    continue
+
+                uid_to_gpu[uid] = gpu_name
+                uid_to_score[uid] = score
+
+                if gpu_name not in gpu_groups:
+                    gpu_groups[gpu_name] = []
+                gpu_groups[gpu_name].append(uid)
+
+            # Normalize GPU priorities
+            total_priority = sum(v for v in gpu_priorities.values() if v > 0)
+            if total_priority == 0:
+                bt.logging.warning("⚠️ All GPU priorities are 0. Entire emission will be burned.")
+                total_assigned_weight = 0.0
+                uid_weights = torch.zeros(len(self.uids), dtype=torch.float32)
+            else:
+                uid_weights = torch.zeros(len(self.uids), dtype=torch.float32)
+                total_assigned_weight = 0.0
+                gpu_actual_emission = {}
+
+                for gpu_name, uids in gpu_groups.items():
+                    priority = gpu_priorities[gpu_name]
+                    group_cap = (priority / total_priority) * total_miner_emission
+
+                    scores = torch.tensor([uid_to_score[uid] for uid in uids], dtype=torch.float32)
+                    if scores.sum() == 0:
+                        continue  # no emission for this group
+
+                    normalized = scores / scores.sum()
+                    capped = normalized * group_cap
+
+                    for i, uid in enumerate(uids):
+                        idx = self.uids.index(uid)
+                        uid_weights[idx] = capped[i]
+
+                    gpu_actual_emission[gpu_name] = group_cap
+                    total_assigned_weight += group_cap
+
+            # Burn the rest
+            burn_uid    = self.get_burn_uid()
+            burn_weight = max(0.0, 1.0 - total_assigned_weight)
+
+            if burn_uid in self.uids:
+                # burn UID already among miners → overwrite its slot
+                uids    = self.uids                      # keep original order
+                weights = uid_weights.clone()            # same length
+                idx     = self.uids.index(burn_uid)
+                weights[idx] = burn_weight
+                bt.logging.debug("[Weights] burn_uid overwritten in-place")
+            else:
+                # burn UID not present → append it
+                uids    = self.uids + [burn_uid]
+                weights = torch.cat(
+                    [uid_weights, torch.tensor([burn_weight], dtype=torch.float32)]
+                )
+                bt.logging.debug("[Weights] burn_uid appended")
+
+            # final normalisation guard
+            weights = weights / weights.sum()
+
+            # Logging
+            # Debug breakdown per GPU
+            bt.logging.debug("📊 Emission breakdown per GPU group:")
+
+            # GPU group emissions
+            for gpu_name, cap in gpu_actual_emission.items():
+                percent = cap * 100.0
+                bt.logging.debug(f"   • {gpu_name:<25} {percent:6.2f}%")
+
+            # Burned portion
+            burn_percent = burn_weight * 100.0
+
+            # Totals
+            bt.logging.info(f"📈 Total miner emission:       {(total_assigned_weight * 100):6.2f}%")
+            bt.logging.info(f"🔥 Burned emission:            {burn_percent:6.2f}%")
+            bt.logging.info(f"⚙️ Final weights: {weights.tolist()}")
+
+            result = self.subtensor.set_weights(
+                netuid=self.config.netuid,
+                wallet=self.wallet,
+                uids=uids,
+                weights=weights,
+                version_key=__version_as_int__,
+                wait_for_inclusion=False,
+            )
+
+            if isinstance(result, tuple) and result[0]:
+                bt.logging.success("✅ Successfully set capped GPU-based weights.")
+            else:
+                bt.logging.error(f"❌ Failed to set GPU-capped weights: {result}")
+
+        except Exception as e:
+            bt.logging.error(f"❌ Exception in set_weight_capped_by_gpu: {e}")
+
     def set_weights(self):
         # Remove all negative scores and attribute them 0.
         self.scores[self.scores < 0] = 0
@@ -1211,52 +1347,54 @@ class Validator:
     def my_sybil_slot(self, ep: int | None = None) -> tuple[int, int]:
         """
         Return (slot_start, slot_end) for the Sybil-PoG epoch.
-        If we’re not an on-chain validator we assume virtual index 0.
+        If we’re not an on-chain validator we optionally simulate index 0.
 
-        • Logs the full validator list once per epoch (INFO)
-        • Logs *our* slot once per current epoch (TRACE)
+        • Logs validator set once per epoch (INFO)
+        • Logs our slot once per current epoch (TRACE)
         """
         ep    = ep if ep is not None else self.current_epoch()
         start = self.epoch_start_block(ep)
 
-        # ─── validator hotkeys & our own ────────────────────────────────────
-        vals  = sorted(self.get_valid_validator_hotkeys())   # on-chain validators
+        # ─── validator hotkeys & our own ───────────────────────────────────
+        vals  = sorted(self.get_valid_validator_hotkeys())
         my_hk = str(self.wallet.hotkey)
 
-        # ─── INFO: validator set (once per epoch) ───────────────────────────
         if not hasattr(self, "_logged_val_epochs"):
             self._logged_val_epochs: set[int] = set()
         if ep not in self._logged_val_epochs:
-            bt.logging.info(f"[Sybil-PoG] Validator set for epoch {ep} "
-                            f"({len(vals)} entries):")
+            bt.logging.info(f"[Sybil-PoG] Validator set for epoch {ep} ({len(vals)} entries):")
             for i, hk in enumerate(vals):
                 bt.logging.info(f"  idx {i:2}: {hk}")
             self._logged_val_epochs.add(ep)
 
-        # ─── determine our slot index ───────────────────────────────────────
-        if my_hk in vals:             # real on-chain validator
+        # ─── determine our slot index ─────────────────────────────────────
+        if my_hk in vals:
             slots = len(vals)
             idx   = vals.index(my_hk)
-        else:                         # local test → pretend to be idx 0
-            if not getattr(self, "_sybil_warned_once", False):
-                bt.logging.warning("[Sybil-PoG] Hotkey not in validator set – "
-                                "pretending to be validator #0 for testing.")
-                self._sybil_warned_once = True
-            slots = len(vals) + 1
-            idx   = 0
+        else:
+            if self.allow_fake_sybil_slot:
+                if not getattr(self, "_sybil_warned_once", False):
+                    bt.logging.warning("[Sybil-PoG] Hotkey not in validator set – "
+                                    "pretending to be validator #0 for testing.")
+                    self._sybil_warned_once = True
+                slots = len(vals) + 1
+                idx   = 0
+            else:
+                raise RuntimeError(
+                    "[Sybil-PoG] Hotkey not in validator set and "
+                    "`allow_fake_sybil_slot` is disabled – refusing to compute slot."
+                )
 
         size        = self.blocks_per_epoch // slots
         slot_start  = start + idx * size
         slot_end    = start + (idx + 1) * size - 1
 
-        # ─── TRACE: log our slot once per *current* epoch ───────────────────
         if not hasattr(self, "_logged_slot_epochs"):
             self._logged_slot_epochs: set[int] = set()
         current_ep = self.current_epoch()
         if ep == current_ep and ep not in self._logged_slot_epochs:
             bt.logging.trace(
-                f"[Sybil-PoG] Epoch {ep}: my slot {idx}/{slots} "
-                f"→ blocks {slot_start}–{slot_end}"
+                f"[Sybil-PoG] Epoch {ep}: my slot {idx}/{slots} → blocks {slot_start}–{slot_end}"
             )
             self._logged_slot_epochs.add(ep)
 
@@ -1577,7 +1715,6 @@ class Validator:
 
                     DEBUG_FAST_SYBIL = False   # <— flip to False to restore normal scheduling
 
-                    # … inside the main loop, *replace* the original “GPU task scheduling” block:
                     if DEBUG_FAST_SYBIL:
                         # one-time initialisation
                         if not hasattr(self, "_next_fast_sybil_block"):
@@ -1604,7 +1741,6 @@ class Validator:
                             )
 
                     else:
-                        # ─── production scheduling (original logic) ───────────────────────────
                         if self.epoch_is_pog(epoch):           # even → legacy PoG
                             if epoch != last_pog_epoch and \
                             self.current_block % self.blocks_per_epoch == 0:
@@ -1660,8 +1796,7 @@ class Validator:
                     if self.current_block - self.last_updated_block > weights_rate_limit:
                         block_next_set_weights = self.current_block + weights_rate_limit
                         self.sync_scores()
-                        #self.set_weights()
-                        self.set_burn_weights()
+                        self.set_weight_capped_by_gpu()
                         self.last_updated_block = self.current_block
                         self.blocks_done.clear()
                         self.blocks_done.add(self.current_block)
