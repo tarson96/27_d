@@ -25,7 +25,7 @@ def xs32(x):
     x ^= (x << 5)  & MASK32
     return x & MASK32
 
-def sybil_prng(seed, i, j):
+def prng(seed, i, j):
     """
     Sybil-style deterministic PRNG for matrix elements.
     """
@@ -276,6 +276,20 @@ def get_remote_gpu_info(ssh_client):
         raise RuntimeError(f"Failed to get GPU info: {error}")
     return json.loads(output)
 
+def merkle_ok(row, proof, root, idx, total):
+    h = leaf_digest(row)
+    for sib in proof:
+        h = hashlib.sha256(h + sib).digest() if idx % 2 == 0 \
+            else hashlib.sha256(sib + h).digest()
+        idx //= 2
+    return h == root
+
+def prng(seed, i, j):
+    s = (seed + (i & MASK32) + j) & MASK32
+    for _ in range(10):
+        s = xs32(s)
+    return s / float(MASK32)
+
 def verify_responses(seeds, root_hashes, responses, indices, n):
     """
     Verifies the responses from GPUs by checking computed values and Merkle proofs (Sybil-style C1/C2 logic).
@@ -294,10 +308,10 @@ def verify_responses(seeds, root_hashes, responses, indices, n):
         for idx, (i, j) in enumerate(gpu_indices):
             # Numeric check, Sybil style: C1 and C2
             if i < n:
-                exp = sum(sybil_prng(s_A, i, k) * sybil_prng(s_B, k, j) for k in range(n))
+                exp = sum(prng(s_A, i, k) * prng(s_B, k, j) for k in range(n))
             else:
                 ir = i - n
-                exp = sum(sybil_prng(s_B, ir, k) * sybil_prng(s_A, k, j) for k in range(n))
+                exp = sum(prng(s_B, ir, k) * prng(s_A, k, j) for k in range(n))
             value_validator = exp
             row_miner = response['rows'][idx]
             proof = response['proofs'][idx]

@@ -64,6 +64,17 @@ def update_pog_stats(db: ComputeDb, hotkey, gpu_name, num_gpus):
         finally:
             cursor.close()
 
+def purge_pog_stats(db: ComputeDb, hotkey: str) -> None:
+    cur = db.get_cursor()
+    try:
+        cur.execute("DELETE FROM pog_stats WHERE hotkey = ?", (hotkey,))
+        db.conn.commit()
+        bt.logging.info(f"[Sybil-PoG] purged pog_stats for {hotkey}")
+    except Exception as e:
+        bt.logging.error(f"[Sybil-PoG] purge error: {e}")
+    finally:
+        cur.close()
+
 def get_pog_specs(db: ComputeDb, hotkey):
     """
     Retrieves the most recent GPU spec entry for a given hotkey where gpu_name is not None.

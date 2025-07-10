@@ -127,9 +127,17 @@ merkle_proof:
   time_tolerance: 5
   submatrix_size: 512
   buffer_factor: 0.45
-  spot_per_gpu: 1
+  spot_per_gpu: 3
   hash_algorithm: 'sha256'
-  pog_retry_limit: 22
+  pog_retry_limit: 20
   pog_retry_interval: 60  # seconds
-  max_workers: 256
-  max_random_delay: 10 # 900 seconds
+  max_workers: 64
+  max_random_delay: 600 # 600 seconds
+
+# ─────────────────────── subnet config parameters ───────────────────────
+subnet_config:
+# PoG-sybil scheduling constants
+  blocks_per_epoch: 360
+  max_challenge_blocks: 11
+  rand_delay_blocks_max: 5
+
