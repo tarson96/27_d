@@ -157,7 +157,7 @@ def wait_for_port_ready(ssh_client, port=27015, timeout=30, hotkey=""):
 
 def kill_health_check_server(ssh_client, port=27015):
     """
-    Kills the health check server process.
+    Kills the health check server process using PID file.
 
     Args:
         ssh_client (paramiko.SSHClient): SSH client connected to the miner
@@ -167,15 +167,33 @@ def kill_health_check_server(ssh_client, port=27015):
         bool: True if killed successfully, False otherwise
     """
     try:
-        stdin, stdout, stderr = ssh_client.exec_command(f"pkill -f 'python3 /tmp/health_check_server.py --port {port}' > /dev/null 2>&1")
+        pid_file_path = f"/tmp/health_check_server_{port}.pid"
+
+        # Read PID from file
+        stdin, stdout, stderr = ssh_client.exec_command(f"cat {pid_file_path} 2>/dev/null || echo ''")
+        pid_output = stdout.read().decode('utf-8').strip()
+
+        if not pid_output:
+            bt.logging.trace(f"Health check server PID file not found, server may not be running")
+            return True
+
+        try:
+            pid = int(pid_output)
+        except ValueError:
+            bt.logging.trace(f"Invalid PID in file: {pid_output}")
+            return True
+
+        # Kill process using PID
+        stdin, stdout, stderr = ssh_client.exec_command(f"kill {pid} 2>/dev/null || echo 'Process not found'")
         exit_status = stdout.channel.recv_exit_status()
 
         if exit_status == 0:
-            bt.logging.trace(f"Health check server killed successfully")
+            bt.logging.trace(f"Health check server (PID: {pid}) killed successfully")
             return True
         else:
-            bt.logging.trace(f"Health check server was not running or already killed (pkill exit status: {exit_status})")
+            bt.logging.trace(f"Health check server (PID: {pid}) was not running or already killed")
             return True
+
     except Exception as e:
         bt.logging.trace(f"Error killing health check server: {e}")
         return False

@@ -241,39 +241,65 @@ class TestValidatorHealthCheck:
         read_channel_output(mock_channel, "test_hotkey")
 
     def test_kill_health_check_server_success(self, mock_ssh_client):
-        """Test successful server kill."""
+        """Test successful server kill using PID file."""
         from neurons.Validator.health_check import kill_health_check_server
 
-        mock_stdin = mock.MagicMock()
-        mock_stdout = mock.MagicMock()
-        mock_stderr = mock.MagicMock()
-        mock_channel = mock.MagicMock()
-        mock_channel.recv_exit_status.return_value = 0
-        mock_stdout.channel = mock_channel
+        # Mock first call: read PID file
+        mock_stdin1 = mock.MagicMock()
+        mock_stdout1 = mock.MagicMock()
+        mock_stderr1 = mock.MagicMock()
+        mock_stdout1.read.return_value = b"12345"
+        
+        # Mock second call: kill process
+        mock_stdin2 = mock.MagicMock()
+        mock_stdout2 = mock.MagicMock()
+        mock_stderr2 = mock.MagicMock()
+        mock_channel2 = mock.MagicMock()
+        mock_channel2.recv_exit_status.return_value = 0
+        mock_stdout2.channel = mock_channel2
 
-        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+        mock_ssh_client.exec_command.side_effect = [
+            (mock_stdin1, mock_stdout1, mock_stderr1),
+            (mock_stdin2, mock_stdout2, mock_stderr2)
+        ]
 
         result = kill_health_check_server(mock_ssh_client, 8080)
 
         assert result is True
-        mock_ssh_client.exec_command.assert_called_once_with("pkill -f 'python3 /tmp/health_check_server.py --port 8080' > /dev/null 2>&1")
+        mock_ssh_client.exec_command.assert_any_call("cat /tmp/health_check_server_8080.pid 2>/dev/null || echo ''")
+        mock_ssh_client.exec_command.assert_any_call("kill 12345 2>/dev/null || echo 'Process not found'")
 
     def test_kill_health_check_server_not_running(self, mock_ssh_client):
-        """Test server kill when not running."""
+        """Test server kill when PID file not found."""
         from neurons.Validator.health_check import kill_health_check_server
 
         mock_stdin = mock.MagicMock()
         mock_stdout = mock.MagicMock()
         mock_stderr = mock.MagicMock()
-        mock_channel = mock.MagicMock()
-        mock_channel.recv_exit_status.return_value = 1
-        mock_stdout.channel = mock_channel
+        mock_stdout.read.return_value = b""
 
         mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
 
         result = kill_health_check_server(mock_ssh_client, 8080)
 
         assert result is True
+        mock_ssh_client.exec_command.assert_called_once_with("cat /tmp/health_check_server_8080.pid 2>/dev/null || echo ''")
+
+    def test_kill_health_check_server_invalid_pid(self, mock_ssh_client):
+        """Test server kill with invalid PID in file."""
+        from neurons.Validator.health_check import kill_health_check_server
+
+        mock_stdin = mock.MagicMock()
+        mock_stdout = mock.MagicMock()
+        mock_stderr = mock.MagicMock()
+        mock_stdout.read.return_value = b"invalid_pid"
+
+        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+
+        result = kill_health_check_server(mock_ssh_client, 8080)
+
+        assert result is True
+        mock_ssh_client.exec_command.assert_called_once_with("cat /tmp/health_check_server_8080.pid 2>/dev/null || echo ''")
 
     def test_kill_health_check_server_exception(self, mock_ssh_client):
         """Test server kill with exception."""
