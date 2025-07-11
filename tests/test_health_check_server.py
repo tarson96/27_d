@@ -30,21 +30,6 @@ class TestHealthCheckServer:
         handler.end_headers.assert_called_once()
         handler.wfile.write.assert_called_with(b"Health OK")
 
-    def test_health_check_handler_get_health(self):
-        """Test that GET /health returns 200 OK."""
-        handler = mock.MagicMock()
-        handler.path = '/health'
-        handler.send_response = mock.MagicMock()
-        handler.send_header = mock.MagicMock()
-        handler.end_headers = mock.MagicMock()
-        handler.wfile = mock.MagicMock()
-
-        HealthCheckHandler.do_GET(handler)
-
-        handler.send_response.assert_called_with(200)
-        handler.send_header.assert_called_with('Content-Type', 'text/plain')
-        handler.end_headers.assert_called_once()
-        handler.wfile.write.assert_called_with(b"Health OK")
 
     def test_health_check_handler_404(self):
         """Test that invalid paths return 404."""
@@ -74,19 +59,7 @@ class TestHealthCheckServer:
         handler.send_header.assert_called_with('Content-Type', 'text/plain')
         handler.end_headers.assert_called_once()
 
-    def test_health_check_handler_head_health(self):
-        """Test that HEAD /health returns 200 OK."""
-        handler = mock.MagicMock()
-        handler.path = '/health'
-        handler.send_response = mock.MagicMock()
-        handler.send_header = mock.MagicMock()
-        handler.end_headers = mock.MagicMock()
-
-        HealthCheckHandler.do_HEAD(handler)
-
-        handler.send_response.assert_called_with(200)
-        handler.send_header.assert_called_with('Content-Type', 'text/plain')
-        handler.end_headers.assert_called_once()
+    # Test for HEAD /health endpoint removed - server now only supports /
 
     def test_health_check_handler_head_404(self):
         """Test that HEAD invalid paths return 404."""

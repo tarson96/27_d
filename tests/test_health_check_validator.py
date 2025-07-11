@@ -60,37 +60,37 @@ def mock_health_check_functions():
     """Mocks all health check functions."""
     mock_upload_script = mock.MagicMock(return_value=True)
     mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
-    mock_wait_ready = mock.MagicMock(return_value=True)
+    mock_wait_port_ready = mock.MagicMock(return_value=True)
     mock_wait_health = mock.MagicMock(return_value=True)
     mock_kill_server = mock.MagicMock(return_value=True)
 
     patcher1 = mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script)
-    patcher2 = mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server)
-    patcher3 = mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready)
-    patcher4 = mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health)
-    patcher5 = mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server)
-    patcher6 = mock.patch('time.sleep', return_value=None)
+    patcher3 = mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server)
+    patcher4 = mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready)
+    patcher5 = mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health)
+    patcher6 = mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server)
+    patcher7 = mock.patch('time.sleep', return_value=None)
 
     patcher1.start()
-    patcher2.start()
     patcher3.start()
     patcher4.start()
     patcher5.start()
     patcher6.start()
+    patcher7.start()
 
     yield {
         'upload_script': mock_upload_script,
         'start_server': mock_start_server,
-        'wait_ready': mock_wait_ready,
+        'wait_port_ready': mock_wait_port_ready,
         'wait_health': mock_wait_health,
         'kill_server': mock_kill_server
     }
 
+    patcher7.stop()
     patcher6.stop()
     patcher5.stop()
     patcher4.stop()
     patcher3.stop()
-    patcher2.stop()
     patcher1.stop()
 
 
@@ -173,7 +173,6 @@ class TestValidatorHealthCheck:
         from neurons.Validator.health_check import start_health_check_server_background
 
         mock_channel.closed = True
-        # Configure mocks to return True only once, then False to avoid infinite loops
         mock_channel.recv_ready.side_effect = [True, False]
         mock_channel.recv_stderr_ready.side_effect = [True, False]
         mock_channel.recv.return_value = b"error output"
@@ -287,6 +286,50 @@ class TestValidatorHealthCheck:
         assert result is False
 
 
+    def test_wait_for_port_ready_success(self, mock_ssh_client):
+        """Test successful health endpoint ready check using urllib.request."""
+        from neurons.Validator.health_check import wait_for_port_ready
+
+        mock_stdin = mock.MagicMock()
+        mock_stdout = mock.MagicMock()
+        mock_stderr = mock.MagicMock()
+        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+        mock_stdout.channel.recv_exit_status.return_value = 0
+
+        result = wait_for_port_ready(mock_ssh_client, 27015, 30, "test_hotkey")
+
+        assert result is True
+        expected_command = 'python3 -c \'import urllib.request; urllib.request.urlopen("http://127.0.0.1:27015/", timeout=2)\''
+        mock_ssh_client.exec_command.assert_called_once_with(expected_command)
+
+    def test_wait_for_port_ready_timeout(self, mock_ssh_client):
+        """Test port ready check timeout."""
+        from neurons.Validator.health_check import wait_for_port_ready
+
+        mock_stdin = mock.MagicMock()
+        mock_stdout = mock.MagicMock()
+        mock_stderr = mock.MagicMock()
+        mock_channel = mock.MagicMock()
+        mock_channel.recv_exit_status.return_value = 1
+        mock_stdout.channel = mock_channel
+
+        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+
+        result = wait_for_port_ready(mock_ssh_client, 27015, 2, "test_hotkey")
+
+        assert result is False
+
+    def test_wait_for_port_ready_exception(self, mock_ssh_client):
+        """Test port ready check with exception."""
+        from neurons.Validator.health_check import wait_for_port_ready
+
+        mock_ssh_client.exec_command.side_effect = Exception("SSH error")
+
+        result = wait_for_port_ready(mock_ssh_client, 27015, 30, "test_hotkey")
+
+        assert result is False
+
+
 # ============================================================================
 # TESTS FOR HEALTH CHECK INTEGRATION (Complete Flow)
 # ============================================================================
@@ -303,7 +346,7 @@ class TestHealthCheckIntegration:
         assert result is True
         mock_health_check_functions['upload_script'].assert_called_once()
         mock_health_check_functions['start_server'].assert_called_once()
-        mock_health_check_functions['wait_ready'].assert_called_once()
+        mock_health_check_functions['wait_port_ready'].assert_called_once()
         mock_health_check_functions['wait_health'].assert_called_once()
         mock_health_check_functions['kill_server'].assert_called_once()
 
@@ -364,11 +407,11 @@ class TestHealthCheckIntegration:
 
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
-        mock_wait_ready = mock.MagicMock(return_value=False)  # Server not ready
+        mock_wait_port_ready = mock.MagicMock(return_value=False)
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
-             mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready), \
+             mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('time.sleep', return_value=None):
 
             result = perform_health_check(mock_axon, miner_info, config_data)
@@ -381,13 +424,13 @@ class TestHealthCheckIntegration:
 
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
-        mock_wait_ready = mock.MagicMock(return_value=True)
-        mock_wait_health = mock.MagicMock(return_value=False)  # HTTP check fails
+        mock_wait_port_ready = mock.MagicMock(return_value=True)
+        mock_wait_health = mock.MagicMock(return_value=False)
         mock_kill_server = mock.MagicMock(return_value=True)
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
-             mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready), \
+             mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health), \
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('time.sleep', return_value=None):
@@ -402,26 +445,25 @@ class TestHealthCheckIntegration:
 
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
-        mock_wait_ready = mock.MagicMock(return_value=True)
+        mock_wait_port_ready = mock.MagicMock(return_value=True)
         mock_wait_health = mock.MagicMock(return_value=True)
-        mock_kill_server = mock.MagicMock(return_value=False)  # Kill server fails
+        mock_kill_server = mock.MagicMock(return_value=False)
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
-             mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready), \
+             mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health), \
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('time.sleep', return_value=None):
 
             result = perform_health_check(mock_axon, miner_info, config_data)
 
-            assert result is True  # Should still succeed even if kill fails
+            assert result is True
 
     def test_perform_health_check_unexpected_exception(self, mock_paramiko, mock_axon, miner_info, config_data):
         """Test health check with unexpected exception in main flow."""
         from neurons.Validator.health_check import perform_health_check
 
-        # Mock successful SSH connection but exception in main flow
         mock_upload_script = mock.MagicMock(side_effect=Exception("Unexpected error in upload"))
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
@@ -440,14 +482,14 @@ class TestHealthCheckIntegration:
 
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock_channel))
-        mock_wait_ready = mock.MagicMock(return_value=True)
+        mock_wait_port_ready = mock.MagicMock(return_value=True)
         mock_wait_health = mock.MagicMock(return_value=True)
         mock_kill_server = mock.MagicMock(return_value=True)
         mock_read_output = mock.MagicMock()
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
-             mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready), \
+             mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health), \
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('neurons.Validator.health_check.read_channel_output', mock_read_output), \
@@ -463,17 +505,17 @@ class TestHealthCheckIntegration:
         from neurons.Validator.health_check import perform_health_check
 
         mock_channel = mock.MagicMock()
-        mock_channel.closed = True  # Channel closed after HTTP check
+        mock_channel.closed = True
 
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock_channel))
-        mock_wait_ready = mock.MagicMock(return_value=True)
+        mock_wait_port_ready = mock.MagicMock(return_value=True)
         mock_wait_health = mock.MagicMock(return_value=True)
         mock_kill_server = mock.MagicMock(return_value=True)
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
-             mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready), \
+             mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health), \
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('time.sleep', return_value=None):
@@ -491,14 +533,14 @@ class TestHealthCheckIntegration:
 
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock_channel))
-        mock_wait_ready = mock.MagicMock(return_value=True)
+        mock_wait_port_ready = mock.MagicMock(return_value=True)
         mock_wait_health = mock.MagicMock(return_value=True)
         mock_kill_server = mock.MagicMock(return_value=True)
         mock_read_output = mock.MagicMock()
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
-             mock.patch('neurons.Validator.health_check.wait_for_server_ready_signal', mock_wait_ready), \
+             mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('neurons.Validator.health_check.wait_for_health_check', mock_wait_health), \
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('neurons.Validator.health_check.read_channel_output', mock_read_output), \

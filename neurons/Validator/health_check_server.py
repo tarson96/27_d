@@ -17,7 +17,7 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Handle GET requests to the health check endpoint"""
-        if self.path == '/health' or self.path == '/':
+        if self.path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
             self.end_headers()
@@ -30,7 +30,7 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         """Handle HEAD requests (for health checks that don't need body)"""
-        if self.path == '/health' or self.path == '/':
+        if self.path == '/':
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
             self.end_headers()
@@ -71,20 +71,17 @@ def create_health_check_server(port=27015, timeout=60, host='0.0.0.0'):
         host (str): Host to bind to (default '0.0.0.0' for all interfaces)
     """
     try:
-        # Asegúrate de que esta línea también se flushee, aunque la clave es la de 'Ready'
         print(f"Health check server: Starting on {host}:{port} (timeout: {timeout}s)", flush=True)
 
         # Create the server
         server = TimeoutHTTPServer((host, port), HealthCheckHandler, timeout)
 
-        # ESTA ES LA LÍNEA CRUCIAL: Añade flush=True
-        print(f"Health check server: Ready - endpoints: /health, /", flush=True)
+        print(f"Health check server: Ready - endpoint: /", flush=True)
 
         # Start the server
         server.serve_forever()
 
     except OSError as e:
-        # Asegúrate de que los errores también se flusheen
         print(f"Health check server: Error - {e}", flush=True)
         if e.errno == 98:  # Address already in use
             print(f"Health check server: Port {port} is already in use", flush=True)

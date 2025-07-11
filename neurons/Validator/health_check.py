@@ -115,61 +115,44 @@ def read_channel_output(channel, hotkey=""):
     except Exception as e:
         bt.logging.trace(f"{hotkey}: Error reading channel output: {e}")
 
-def wait_for_server_ready_signal(channel, expected_signal: str, timeout: int, hotkey: str):
+
+def wait_for_port_ready(ssh_client, port=27015, timeout=30, hotkey=""):
     """
-    Waits for a specific signal string to appear in the channel's output,
-    indicating the server is ready. Reads output non-blockingly.
+    Waits for a health endpoint to become available using urllib.request.
+
+    This function checks if the health check server is responding by making
+    HTTP requests to the root endpoint (/) on the specified port.
 
     Args:
-        channel (paramiko.Channel): The active Paramiko channel object.
-        expected_signal (str): The string to look for (e.g., "Health check server: Ready").
-        timeout (int): Maximum time in seconds to wait for the signal.
-        hotkey (str): Hotkey for logging context.
+        ssh_client (paramiko.SSHClient): SSH client connected to the miner
+        port (int): Port to check
+        timeout (int): Maximum time to wait in seconds
+        hotkey (str): Hotkey for logging context
 
     Returns:
-        bool: True if the signal is received within the timeout, False otherwise.
+        bool: True if health endpoint becomes available within timeout, False otherwise
     """
     start_time = time.time()
-    buffered_output = ""
-
-    bt.logging.trace(f"{hotkey}: Waiting for server ready signal '{expected_signal}' on channel.")
+    check_interval = 1
 
     while time.time() - start_time < timeout:
         try:
-            # Read all available stdout
-            while channel.recv_ready():
-                chunk = channel.recv(4096).decode('utf-8', errors='ignore')
-                buffered_output += chunk
-                if chunk:
-                    bt.logging.trace(f"{hotkey}: Server stdout (live read for ready signal): {chunk.strip()}")
+            command = f'python3 -c \'import urllib.request; urllib.request.urlopen("http://127.0.0.1:{port}/", timeout=2)\''
+            bt.logging.trace(f"{hotkey}: Checking health endpoint on port {port} (path /)")
 
-            # Read all available stderr (and log separately)
-            while channel.recv_stderr_ready():
-                err_chunk = channel.recv_stderr(4096).decode('utf-8', errors='ignore')
-                buffered_output += err_chunk
-                if err_chunk:
-                    bt.logging.trace(f"{hotkey}: Server stderr (live read for ready signal): {err_chunk.strip()}")
+            stdin, stdout, stderr = ssh_client.exec_command(command)
+            exit_status = stdout.channel.recv_exit_status()
 
-            # Check if the signal is in the buffered output
-            if expected_signal in buffered_output:
-                bt.logging.info(f"{hotkey}: Server ready signal received: '{expected_signal}'")
+            if exit_status == 0:
+                bt.logging.info(f"{hotkey}: Health endpoint on port {port} (path /) is now responding")
                 return True
 
-            # Check if the channel closed unexpectedly (server crashed)
-            # This should be checked after attempting to read all available data
-            if channel.closed and expected_signal not in buffered_output:
-                bt.logging.error(f"{hotkey}: Channel closed unexpectedly before receiving ready signal. Server likely crashed.")
-                # Log any remaining buffered output one last time for context
-                if buffered_output:
-                    bt.logging.error(f"{hotkey}: Final buffered output at crash: {buffered_output.strip()}")
-                return False
-
         except Exception as e:
-            bt.logging.error(f"{hotkey}: Error while waiting for ready signal: {e}")
-            return False
+            bt.logging.trace(f"{hotkey}: Error checking health endpoint: {e}")
 
+        time.sleep(check_interval)
 
-    bt.logging.error(f"{hotkey}: Timed out waiting for server ready signal '{expected_signal}'. Last buffered output: {buffered_output.strip()}")
+    bt.logging.error(f"{hotkey}: Health endpoint on port {port} (path /) did not become available within {timeout} seconds")
     return False
 
 def kill_health_check_server(ssh_client, port=27015):
@@ -184,8 +167,6 @@ def kill_health_check_server(ssh_client, port=27015):
         bool: True if killed successfully, False otherwise
     """
     try:
-        # Find and kill the health check server process
-        # Redirect output of pkill to /dev/null to avoid buffer issues on the channel
         stdin, stdout, stderr = ssh_client.exec_command(f"pkill -f 'python3 /tmp/health_check_server.py --port {port}' > /dev/null 2>&1")
         exit_status = stdout.channel.recv_exit_status()
 
@@ -266,16 +247,13 @@ def perform_health_check(axon, miner_info, config_data):
             bt.logging.info(f"{hotkey}: SSH connection failed during health check: {ssh_error}")
             return False
 
-        # Health check script path
         health_check_script_path = "neurons/Validator/health_check_server.py"
 
-        # Upload health check script
         if not upload_health_check_script(ssh_client, health_check_script_path):
             bt.logging.error(f"{hotkey}: Failed to upload health check script.")
             return False
 
         internal_health_check_port = 27015
-        # Start health check server in background
         bt.logging.trace(f"{hotkey}: Starting health check server in background on port {internal_health_check_port}.")
         server_started, channel = start_health_check_server_background(ssh_client, internal_health_check_port, timeout=60)
 
@@ -283,18 +261,14 @@ def perform_health_check(axon, miner_info, config_data):
             bt.logging.error(f"{hotkey}: Failed to initiate health check server command or channel is invalid. See errors above.")
             return False
 
-        # --- Active Check: Wait for server's "ready" signal ---
-        # The expected signal string from your health_check_server.py
-        # REMINDER: Ensure your remote script prints this with `flush=True`
-        expected_ready_signal = f"Health check server: Ready - endpoints: /health, /"
-        server_ready_timeout = 10 # Max time to wait for the server to print its ready message
+        server_ready_timeout = 15
 
-        bt.logging.info(f"{hotkey}: Attempting to confirm health check server's internal readiness via its output.")
-        if not wait_for_server_ready_signal(channel, expected_ready_signal, server_ready_timeout, hotkey):
-            bt.logging.error(f"{hotkey}: Health check server did not signal readiness within {server_ready_timeout} seconds. Aborting health check.")
+        bt.logging.info(f"{hotkey}: Attempting to confirm health check server's internal readiness via port check.")
+        if not wait_for_port_ready(ssh_client, internal_health_check_port, server_ready_timeout, hotkey):
+            bt.logging.error(f"{hotkey}: Health check server did not become ready within {server_ready_timeout} seconds. Aborting health check.")
             return False
 
-        bt.logging.info(f"{hotkey}: Health check server confirmed internally ready.")
+        bt.logging.info(f"{hotkey}: Health check server confirmed internally ready via port check.")
 
         external_health_check_port = miner_info.get('fixed_external_user_port', 27015)
         health_check_timeout = 15
