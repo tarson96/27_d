@@ -49,7 +49,7 @@ from compute import (
 )
 from compute.axon import ComputeSubnetSubtensor
 from compute.protocol import Allocate
-from compute.pubsub import ValidatorGatewayPubSubClient, MessageFactory
+from compute.pubsub import ValidatorGatewayPubSubClient
 from compute.utils.db import ComputeDb
 from compute.utils.math import percent
 from compute.utils.parser import ComputeArgPaser
@@ -187,9 +187,6 @@ class Validator:
             config=self.config,
             timeout=30.0,
             auto_refresh_interval=600  # 30 minutes
-        )
-        self.message_factory = MessageFactory(
-            validator_hotkey=self.wallet.hotkey.ss58_address
         )
 
         # Track known miners for discovery publishing
@@ -609,7 +606,7 @@ class Validator:
 
     async def _publish_miner_discovery_async(self, neuron):
         """Helper method to publish miner discovery asynchronously."""
-        await self.publish_miner_discovery(
+        await self.pubsub_client.publish_miner_discovery_event(
             miner_hotkey=neuron.hotkey,
             gpu_specs={
                 "model": "Unknown",  # Will be updated after POG test
@@ -1016,7 +1013,7 @@ class Validator:
 
                 # Publish successful POG result
                 validation_duration = time.time() - start_time
-                await self.publish_pog_result(
+                await self.pubsub_client.publish_pog_result_event(
                     miner_hotkey=hotkey,
                     request_id=request_id,
                     result="success",
@@ -1036,7 +1033,7 @@ class Validator:
 
                 # Publish failed POG result
                 validation_duration = time.time() - start_time
-                await self.publish_pog_result(
+                await self.pubsub_client.publish_pog_result_event(
                     miner_hotkey=hotkey,
                     request_id=request_id,
                     result="failure",
@@ -1051,7 +1048,7 @@ class Validator:
 
             # Publish error POG result
             validation_duration = time.time() - start_time
-            await self.publish_pog_result(
+            await self.pubsub_client.publish_pog_result_event(
                 miner_hotkey=hotkey,
                 request_id=request_id,
                 result="error",
@@ -1085,7 +1082,7 @@ class Validator:
             # Publish allocation request BEFORE making the actual request
             try:
                 allocation_uuid = str(uuid.uuid4())
-                await self.publish_allocation_request(
+                await self.pubsub_client.publish_allocation_request_event(
                     miner_hotkey=axon.hotkey,
                     allocation_uuid=allocation_uuid,
                     request_type="pog_test",
@@ -1377,7 +1374,7 @@ class Validator:
 
                         # Publish validator status update
                         active_validations = len(getattr(self, 'active_allocations', []))
-                        await self.publish_validator_status(
+                        await self.pubsub_client.publish_validator_status_event(
                             status="online",
                             version=str(__version_as_int__),
                             active_validations=active_validations,
@@ -1447,21 +1444,7 @@ class Validator:
         """
         try:
             # Decode the message data
-            data = json.loads(message.data.decode("utf-8"))
-
-            # Process different message types
-            message_type = data.get("messageType")
-
-            if message_type == "gpu_allocation":
-                self._handle_gpu_allocation(data)
-            elif message_type == "gpu_deallocation":
-                self._handle_gpu_deallocation(data)
-            elif message_type == "system_version_release":
-                self._handle_system_update(data)
-            else:
-                bt.logging.info(f"Received unknown message type: {message_type}")
-
-            bt.logging.info(f"Processed Pub/Sub message: {data}")
+            # data = json.loads(message.data.decode("utf-8"))
 
             # Acknowledge the message
             message.ack()
@@ -1473,145 +1456,6 @@ class Validator:
             bt.logging.error(f"Error processing message: {e}")
             message.nack()
 
-    def _handle_gpu_allocation(self, data):
-        """Handle GPU allocation messages from backend."""
-        bt.logging.info(f"Processing GPU allocation: {data}")
-        # Add your GPU allocation logic here
-
-    def _handle_gpu_deallocation(self, data):
-        """Handle GPU deallocation messages from backend."""
-        bt.logging.info(f"Processing GPU deallocation: {data}")
-        # Add your GPU deallocation logic here
-
-    def _handle_system_update(self, data):
-        """Handle system update messages from backend."""
-        bt.logging.info(f"Processing system update: {data}")
-        # Add your system update logic here
-
-    # Publishing methods using the new structured approach
-    async def publish_miner_discovery(self, miner_hotkey: str, gpu_specs: dict, network_info: dict = None, registration_block: int = None):
-        """
-        Publish a miner discovery message.
-
-        Args:
-            miner_hotkey: The hotkey of the discovered miner
-            gpu_specs: GPU specifications dict
-            network_info: Optional network information dict
-            registration_block: Optional registration block number
-        """
-        try:
-            # Create miner discovery message
-            message = self.message_factory.create_miner_discovery(
-                miner_hotkey=miner_hotkey,
-                gpu_specs=gpu_specs,
-                network_info=network_info,
-                registration_block=registration_block or self.current_block
-            )
-
-            # Publish to miner events topic
-            message_id = await self.pubsub_client.publish_to_miner_events(message)
-
-            if message_id:
-                bt.logging.info(f"Published miner discovery for {miner_hotkey}, message ID: {message_id}")
-
-        except Exception as e:
-            bt.logging.error(f"Failed to publish miner discovery: {e}")
-
-    async def publish_pog_result(self, miner_hotkey: str, request_id: str,
-                                result: str, validation_duration: float,
-                                score: float = None, benchmark_data: dict = None):
-        """
-        Publish a PoG validation result.
-
-        Args:
-            miner_hotkey: The validated miner's hotkey
-            request_id: The PoG request ID
-            result: Validation result ("success", "failure", "timeout", "error")
-            validation_duration: Duration of validation in seconds
-            score: Optional validation score
-            benchmark_data: Optional benchmark data
-        """
-        try:
-            # Create PoG result message
-            message = self.message_factory.create_pog_result(
-                miner_hotkey=miner_hotkey,
-                request_id=request_id,
-                result=result,
-                validation_duration_seconds=validation_duration,
-                score=score,
-                benchmark_data=benchmark_data
-            )
-
-            # Publish to validation events topic
-            message_id = await self.pubsub_client.publish_to_validation_events(message)
-
-            if message_id:
-                bt.logging.info(f"Published PoG result for {miner_hotkey}, message ID: {message_id}")
-
-        except Exception as e:
-            bt.logging.error(f"Failed to publish PoG result: {e}")
-
-    async def publish_validator_status(self, status: str, version: str,
-                                     active_validations: int, last_sync_block: int = None):
-        """
-        Publish validator status update.
-
-        Args:
-            status: Validator status ("online", "offline", "maintenance", "syncing")
-            version: Current validator version
-            active_validations: Number of active validations
-            last_sync_block: Last synced block number
-        """
-        try:
-            # Create validator status message
-            message = self.message_factory.create_validator_status(
-                status=status,
-                version=version,
-                active_validations=active_validations,
-                last_sync_block=last_sync_block or self.current_block
-            )
-
-            # Publish to system events topic
-            await self.pubsub_client.publish_to_system_events(message)
-
-        except Exception as e:
-            bt.logging.error(f"Failed to publish validator status: {e}")
-
-    async def publish_allocation_request(self, miner_hotkey: str, allocation_uuid: str,
-                                       request_type: str = "pog_test",
-                                       device_requirements: dict = None,
-                                       expected_duration_minutes: int = 10):
-        """
-        Publish allocation request message.
-
-        Args:
-            miner_hotkey: Target miner's hotkey
-            allocation_uuid: Unique allocation identifier
-            request_type: Type of allocation request
-            device_requirements: Required device specifications
-            expected_duration_minutes: Expected allocation duration
-        """
-        try:
-            # Create allocation request message
-            message = self.message_factory.create_allocation_request(
-                miner_hotkey=miner_hotkey,
-                allocation_uuid=allocation_uuid,
-                request_type=request_type,
-                device_requirements=device_requirements,
-                expected_duration_minutes=expected_duration_minutes
-            )
-
-            # Publish to allocation events topic
-            message_id = await self.pubsub_client.publish_to_allocation_events(message)
-
-            if message_id:
-                bt.logging.info(f"Published allocation request for {miner_hotkey}, message ID: {message_id}")
-
-        except Exception as e:
-            bt.logging.error(f"Failed to publish allocation request: {e}")
-
-
-
     async def pubsub_loop(self):
         """Start pubsub subscription using structured client"""
         # only subscribe to allocation events for now
@@ -1620,6 +1464,7 @@ class Validator:
             self._handle_pubsub_message,
         )
         await self.pubsub_client.subscribe_to_messages_topic(TOPICS.ALLOCATION_EVENTS)
+
 
 def main():
     """

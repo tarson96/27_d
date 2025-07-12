@@ -15,7 +15,7 @@ from google.api_core import exceptions as gcp_exceptions
 
 from .auth import ValidatorGatewayAuth
 from .message_types import ValidatorMessage, TOPICS
-from .exceptions import PublishError, AuthenticationError, ConfigurationError
+from .exceptions import AuthenticationError, ConfigurationError
 
 
 class ValidatorGatewayPubSubClient:
@@ -85,12 +85,16 @@ class ValidatorGatewayPubSubClient:
         try:
             self._initialize_clients()
         except AuthenticationError as e:
-            self.logger.error(f"Failed to initialize Pub/Sub client: {e}")
+            self.logger.error("Failed to initialize Pub/Sub client: %s", e)
             self.logger.warning("Pub/Sub client will retry authentication when first message is published")
             # Don't raise - allow the client to be created and retry later
             self.publisher = None
             self.subscriber = None
             # Keep topic paths - they don't require authentication
+
+        # Initialize message factory for high-level methods
+        from .message_factory import MessageFactory
+        self._message_factory = MessageFactory(validator_hotkey=self.wallet.hotkey.ss58_address)
 
         # Start background queue workers
         self._start_queue_workers()
@@ -112,19 +116,23 @@ class ValidatorGatewayPubSubClient:
 
             except Exception as e:
                 last_error = e
-                self.logger.warning(f"Failed to initialize Pub/Sub client (attempt {attempt + 1}/{max_retries}): {e}")
+                self.logger.warning(
+                    "Failed to initialize Pub/Sub client (attempt %d/%d): %s",
+                    attempt + 1, max_retries, e
+                )
 
                 if attempt < max_retries - 1:
                     # Exponential backoff: 2, 4, 8 seconds
-                    import time
                     backoff_time = 2 ** attempt
-                    self.logger.info(f"Retrying in {backoff_time} seconds...")
+                    self.logger.info("Retrying in %d seconds...", backoff_time)
                     time.sleep(backoff_time)
 
         # All retries failed
-        raise AuthenticationError(f"Failed to initialize Pub/Sub client after {max_retries} attempts. Last error: {last_error}")
+        raise AuthenticationError(
+            f"Failed to initialize Pub/Sub client after {max_retries} attempts. Last error: {last_error}"
+        )
 
-    def refresh_credentials(self, max_retries: int = 3) -> bool:
+    def refresh_credentials(self, max_retries: int = 5) -> bool:
         """
         Refresh authentication tokens and reinitialize clients with retry logic.
 
@@ -142,17 +150,22 @@ class ValidatorGatewayPubSubClient:
 
             except Exception as e:
                 last_error = e
-                self.logger.warning(f"Failed to refresh credentials (attempt {attempt + 1}/{max_retries}): {e}")
+                self.logger.warning(
+                    "Failed to refresh credentials (attempt %d/%d): %s",
+                    attempt + 1, max_retries, e
+                )
 
                 if attempt < max_retries - 1:
                     # Exponential backoff: 2, 4, 8 seconds
-                    import time
                     backoff_time = 2 ** attempt
-                    self.logger.info(f"Retrying credential refresh in {backoff_time} seconds...")
+                    self.logger.info("Retrying credential refresh in %d seconds...", backoff_time)
                     time.sleep(backoff_time)
 
         # All retries failed
-        self.logger.error(f"Failed to refresh credentials after {max_retries} attempts. Last error: {last_error}")
+        self.logger.error(
+            "Failed to refresh credentials after %d attempts. Last error: %s",
+            max_retries, last_error
+        )
         return False
 
     def _start_queue_workers(self):
@@ -163,7 +176,7 @@ class ValidatorGatewayPubSubClient:
             for topic_name in self.queues.keys():
                 worker = asyncio.create_task(self._queue_worker(topic_name))
                 self._queue_workers[topic_name] = worker
-                self.logger.info(f"Started queue worker for {topic_name}")
+                self.logger.info("Started queue worker for %s", topic_name)
         except RuntimeError:
             # No running loop, workers will start when first message is queued
             self.logger.debug("No running event loop, queue workers will start when needed")
@@ -195,7 +208,7 @@ class ValidatorGatewayPubSubClient:
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
-                self.logger.error(f"Error in queue worker for {topic_name}: {e}")
+                self.logger.error("Error in queue worker for %s: %s", topic_name, e)
                 await asyncio.sleep(1.0)
 
     def _ensure_clients_initialized(self) -> bool:
@@ -209,7 +222,7 @@ class ValidatorGatewayPubSubClient:
             self._initialize_clients()
             return True
         except AuthenticationError as e:
-            self.logger.error(f"Failed to initialize clients: {e}")
+            self.logger.error("Failed to initialize clients: %s", e)
             return False
 
     async def _publish_with_retry(self, topic_name: str, message_data: bytes) -> bool:
@@ -219,7 +232,7 @@ class ValidatorGatewayPubSubClient:
             return False
 
         if topic_name not in self._topic_paths:
-            self.logger.error(f"Topic {topic_name} not found in topic paths")
+            self.logger.error("Topic %s not found in topic paths", topic_name)
             return False
 
         for attempt in range(3):
@@ -229,7 +242,7 @@ class ValidatorGatewayPubSubClient:
                 return True
 
             except gcp_exceptions.Unauthenticated:
-                self.logger.warning(f"Token expired for {topic_name}, refreshing credentials...")
+                self.logger.warning("Token expired for %s, refreshing credentials...", topic_name)
 
                 # Try to refresh credentials with retries
                 if self.refresh_credentials():
@@ -237,11 +250,11 @@ class ValidatorGatewayPubSubClient:
                     continue
                 else:
                     # Credential refresh failed after retries
-                    self.logger.error(f"Cannot publish to {topic_name}: credential refresh failed")
+                    self.logger.error("Cannot publish to %s: credential refresh failed", topic_name)
                     return False
 
             except Exception as e:
-                self.logger.error(f"Publish to {topic_name} failed (attempt {attempt + 1}): {e}")
+                self.logger.error("Publish to %s failed (attempt %d): %s", topic_name, attempt + 1, e)
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
 
@@ -277,6 +290,159 @@ class ValidatorGatewayPubSubClient:
         """Publish a message to the system-events topic."""
         return await self._publish_message(TOPICS.SYSTEM_EVENTS, message)
 
+    # High-level convenience methods for validators
+    async def publish_miner_discovery_event(
+        self,
+        miner_hotkey: str,
+        gpu_specs: dict,
+        network_info: dict = None,
+        registration_block: int = None,
+    ) -> str:
+        """
+        High-level method to publish miner discovery with error handling.
+
+        Args:
+            miner_hotkey: The hotkey of the discovered miner
+            gpu_specs: GPU specifications dict
+            network_info: Optional network information dict
+            registration_block: Optional registration block number
+
+        Returns:
+            Message ID or queued ID
+        """
+        try:
+            # Create miner discovery message
+            message = self._message_factory.create_miner_discovery(
+                miner_hotkey=miner_hotkey,
+                gpu_specs=gpu_specs,
+                network_info=network_info,
+                registration_block=registration_block
+            )
+
+            # Publish to miner events topic
+            return await self.publish_to_miner_events(message)
+
+        except Exception as e:
+            self.logger.error("Failed to publish miner discovery: %s", e)
+            raise
+
+    async def publish_pog_result_event(
+        self,
+        miner_hotkey: str,
+        request_id: str,
+        result: str,
+        validation_duration: float,
+        score: float = None,
+        benchmark_data: dict = None,
+        error_details: str = None,
+    ) -> str:
+        """
+        High-level method to publish PoG validation result with error handling.
+
+        Args:
+            miner_hotkey: The validated miner's hotkey
+            request_id: The PoG request ID
+            result: Validation result ("success", "failure", "timeout", "error")
+            validation_duration: Duration of validation in seconds
+            score: Optional validation score
+            benchmark_data: Optional benchmark data dict
+            error_details: Optional error details if result was error/failure
+
+        Returns:
+            Message ID or queued ID
+        """
+        try:
+            # Create PoG result message
+            message = self._message_factory.create_pog_result(
+                miner_hotkey=miner_hotkey,
+                request_id=request_id,
+                result=result,
+                validation_duration_seconds=validation_duration,
+                score=score,
+                benchmark_data=benchmark_data,
+                error_details=error_details
+            )
+
+            # Publish to validation events topic
+            return await self.publish_to_validation_events(message)
+
+        except Exception as e:
+            self.logger.error("Failed to publish PoG result: %s", e)
+            raise
+
+    async def publish_validator_status_event(
+        self,
+        status: str,
+        version: str,
+        active_validations: int,
+        last_sync_block: int = None,
+    ) -> str:
+        """
+        High-level method to publish validator status update with error handling.
+
+        Args:
+            status: Validator status ("online", "offline", "maintenance", "syncing")
+            version: Current validator version
+            active_validations: Number of active validations
+            last_sync_block: Last synced block number
+
+        Returns:
+            Message ID or queued ID
+        """
+        try:
+            # Create validator status message
+            message = self._message_factory.create_validator_status(
+                status=status,
+                version=version,
+                active_validations=active_validations,
+                last_sync_block=last_sync_block
+            )
+
+            # Publish to system events topic
+            return await self.publish_to_system_events(message)
+
+        except Exception as e:
+            self.logger.error("Failed to publish validator status: %s", e)
+            raise
+
+    async def publish_allocation_request_event(
+        self,
+        miner_hotkey: str,
+        allocation_uuid: str,
+        request_type: str = "pog_test",
+        device_requirements: dict = None,
+        expected_duration_minutes: int = 10,
+    ) -> str:
+        """
+        High-level method to publish allocation request with error handling.
+
+        Args:
+            miner_hotkey: Target miner's hotkey
+            allocation_uuid: Unique allocation identifier
+            request_type: Type of allocation request
+            device_requirements: Required device specifications dict
+            expected_duration_minutes: Expected allocation duration
+
+        Returns:
+            Message ID or queued ID
+        """
+        try:
+            # Create allocation request message
+            message = self._message_factory.create_allocation_request(
+                miner_hotkey=miner_hotkey,
+                allocation_uuid=allocation_uuid,
+                request_type=request_type,
+                device_requirements=device_requirements,
+                expected_duration_minutes=expected_duration_minutes
+            )
+
+            # Publish to allocation events topic
+            return await self.publish_to_allocation_events(message)
+
+        except Exception as e:
+            self.logger.error("Failed to publish allocation request: %s", e)
+            raise
+
     def set_message_callback(self, topic_name: str, callback: Callable):
         """
         Set the callback function for processing received messages.
@@ -290,21 +456,25 @@ class ValidatorGatewayPubSubClient:
         """Default message callback that logs and acknowledges messages."""
         try:
             # Decode the message data
-            data = json.loads(message.data.decode("utf-8"))
+            # data = json.loads(message.data.decode("utf-8"))
 
-            self.logger.info(f"Received Pub/Sub message: {data}")
+            # self.logger.info("Received Pub/Sub message: %s", data)
 
             # Acknowledge the message
             message.ack()
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in message: {e}")
+            self.logger.error("Invalid JSON in message: %s", e)
             message.nack()
         except Exception as e:
-            self.logger.error(f"Error processing message: {e}")
+            self.logger.error("Error processing message: %s", e)
             message.nack()
 
-    async def subscribe_to_messages_topic(self, topic_name: str,subscription_name_suffix: Optional[str] = None):
+    async def subscribe_to_messages_topic(
+        self,
+        topic_name: str,
+        subscription_name_suffix: Optional[str] = None,
+    ):
         """
         Subscribe to the pub sub topic.
 
@@ -329,9 +499,9 @@ class ValidatorGatewayPubSubClient:
             # Check if subscription exists, create if it doesn't
             try:
                 self.subscriber.get_subscription(request={"subscription": subscription_path})
-                self.logger.info(f"Using existing subscription: {subscription_path}")
+                # self.logger.info("Using existing subscription: %s", subscription_path)
             except gcp_exceptions.NotFound:
-                self.logger.info(f"Creating new subscription: {subscription_path}")
+                # self.logger.info("Creating new subscription: %s", subscription_path)
                 self.subscriber.create_subscription(
                     request={"name": subscription_path, "topic": topic_path}
                 )
@@ -354,8 +524,8 @@ class ValidatorGatewayPubSubClient:
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to subscribe to messages topic: {e}")
-            raise ConfigurationError(f"Failed to subscribe to messages topic: {e}")
+            self.logger.error("Failed to subscribe to messages topic: %s", e)
+            raise ConfigurationError(f"Failed to subscribe to messages topic: {e}") from e
 
     def stop_subscription(self):
         """Stop the current subscription."""
@@ -366,7 +536,7 @@ class ValidatorGatewayPubSubClient:
                     subscription_future = None
                     self.logger.info("Pub/Sub subscription stopped")
             except Exception as e:
-                self.logger.error(f"Error stopping subscription: {e}")
+                self.logger.error("Error stopping subscription: %s", e)
 
     def get_queue_status(self) -> Dict[str, int]:
         """Get current queue sizes."""
@@ -384,7 +554,7 @@ class ValidatorGatewayPubSubClient:
             queue_status = self.get_queue_status()
             remaining = sum(queue_status.values())
             if remaining > 0:
-                self.logger.warning(f"Stopping with {remaining} unpublished messages: {queue_status}")
+                self.logger.warning("Stopping with %d unpublished messages: %s", remaining, queue_status)
             else:
                 self.logger.info("All queue workers stopped, no pending messages")
 
@@ -400,7 +570,7 @@ class ValidatorGatewayPubSubClient:
             queue_status = self.get_queue_status()
             remaining = sum(queue_status.values())
             if remaining > 0:
-                self.logger.warning(f"Closing with {remaining} unpublished messages: {queue_status}")
+                self.logger.warning("Closing with %d unpublished messages: %s", remaining, queue_status)
 
         if self.publisher:
             self.publisher.close()
