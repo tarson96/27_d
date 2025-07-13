@@ -249,7 +249,7 @@ class TestValidatorHealthCheck:
         mock_stdout1 = mock.MagicMock()
         mock_stderr1 = mock.MagicMock()
         mock_stdout1.read.return_value = b"12345"
-        
+
         # Mock second call: kill process
         mock_stdin2 = mock.MagicMock()
         mock_stdout2 = mock.MagicMock()

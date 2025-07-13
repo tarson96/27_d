@@ -1,7 +1,5 @@
-import pytest
 from unittest import mock
 import urllib.request
-import sys
 
 
 def check_health_endpoint_simple(url, timeout=2):

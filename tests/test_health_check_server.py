@@ -59,7 +59,6 @@ class TestHealthCheckServer:
         handler.send_header.assert_called_with('Content-Type', 'text/plain')
         handler.end_headers.assert_called_once()
 
-    # Test for HEAD /health endpoint removed - server now only supports /
 
     def test_health_check_handler_head_404(self):
         """Test that HEAD invalid paths return 404."""
