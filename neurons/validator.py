@@ -1079,22 +1079,6 @@ class Validator:
                 "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
             }
 
-            # Publish allocation request BEFORE making the actual request
-            try:
-                allocation_uuid = str(uuid.uuid4())
-                await self.pubsub_client.publish_allocation_request_event(
-                    miner_hotkey=axon.hotkey,
-                    allocation_uuid=allocation_uuid,
-                    request_type="pog_test",
-                    device_requirements={
-                        "gpu_count": device_requirement["gpu"]["count"],
-                        "cpu_cores": device_requirement["cpu"]["count"],
-                        "ram_gb": device_requirement["ram"]["capacity"] // (1024**3),
-                        "storage_gb": device_requirement["hard_disk"]["capacity"] // (1024**3)
-                    }
-                )
-            except Exception as e:
-                bt.logging.error(f"Failed to publish allocation request for {axon.hotkey}: {e}")
             async with bt.dendrite(wallet=self.wallet) as dendrite:
                 # Simulate an allocation query with Allocate
                 check_allocation = await dendrite(
@@ -1371,22 +1355,6 @@ class Validator:
                     if self.current_block % block_next_sync_status == 0 or block_next_sync_status < self.current_block:
                         block_next_sync_status = self.current_block + 25  # ~ every 5 minutes
                         self.sync_status()
-
-                        # Publish validator status update
-                        active_validations = len(getattr(self, 'active_allocations', []))
-                        await self.pubsub_client.publish_validator_status_event(
-                            status="online",
-                            version=str(__version_as_int__),
-                            active_validations=active_validations,
-                            last_sync_block=self.current_block
-                        )
-
-                        # Log queue status for monitoring
-                        if hasattr(self.pubsub_client, 'get_queue_status'):
-                            queue_status = self.pubsub_client.get_queue_status()
-                            if any(size > 0 for size in queue_status.values()):
-                                bt.logging.info(f"Pub/Sub queue status: {queue_status}")
-
                         # Log chain data to wandb
                         chain_data = {
                             "Block": self.current_block,
@@ -1438,33 +1406,6 @@ class Validator:
                 bt.logging.success("Keyboard interrupt detected. Exiting validator.")
                 exit()
 
-    def _handle_pubsub_message(self, message):
-        """
-        Handle received pubsub messages using structured approach.
-        """
-        try:
-            # Decode the message data
-            # data = json.loads(message.data.decode("utf-8"))
-
-            # Acknowledge the message
-            message.ack()
-
-        except json.JSONDecodeError as e:
-            bt.logging.error(f"Invalid JSON in message: {e}")
-            message.nack()
-        except Exception as e:
-            bt.logging.error(f"Error processing message: {e}")
-            message.nack()
-
-    async def pubsub_loop(self):
-        """Start pubsub subscription using structured client"""
-        # only subscribe to allocation events for now
-        self.pubsub_client.set_message_callback(
-            TOPICS.ALLOCATION_EVENTS,
-            self._handle_pubsub_message,
-        )
-        await self.pubsub_client.subscribe_to_messages_topic(TOPICS.ALLOCATION_EVENTS)
-
 
 def main():
     """
@@ -1474,7 +1415,6 @@ def main():
     with the Bittensor network.
     """
     validator = Validator()
-    asyncio.run(validator.pubsub_loop())
     asyncio.run(validator.start())
 
 

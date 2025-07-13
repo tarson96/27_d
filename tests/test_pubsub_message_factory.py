@@ -146,14 +146,14 @@ class TestPubSubBasicFunctionality:
         # Document the expected message structure
 
         base_message_structure = {
-            "messageType": "string",
+            "message_type": "string",
             "timestamp": "ISO 8601 string with Z suffix",
             "source": "validator",
             "data": "dict with message-specific fields"
         }
 
         # Verify structure
-        assert "messageType" in base_message_structure
+        assert "message_type" in base_message_structure
         assert "timestamp" in base_message_structure
         assert "source" in base_message_structure
         assert "data" in base_message_structure

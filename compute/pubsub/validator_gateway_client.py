@@ -282,14 +282,6 @@ class ValidatorGatewayPubSubClient:
         """Publish a message to the validation-events topic."""
         return await self._publish_message(TOPICS.VALIDATION_EVENTS, message)
 
-    async def publish_to_allocation_events(self, message: ValidatorMessage) -> str:
-        """Publish a message to the allocation-events topic."""
-        return await self._publish_message(TOPICS.ALLOCATION_EVENTS, message)
-
-    async def publish_to_system_events(self, message: ValidatorMessage) -> str:
-        """Publish a message to the system-events topic."""
-        return await self._publish_message(TOPICS.SYSTEM_EVENTS, message)
-
     # High-level convenience methods for validators
     async def publish_miner_discovery_event(
         self,
@@ -368,79 +360,6 @@ class ValidatorGatewayPubSubClient:
 
         except Exception as e:
             self.logger.error("Failed to publish PoG result: %s", e)
-            raise
-
-    async def publish_validator_status_event(
-        self,
-        status: str,
-        version: str,
-        active_validations: int,
-        last_sync_block: int = None,
-    ) -> str:
-        """
-        High-level method to publish validator status update with error handling.
-
-        Args:
-            status: Validator status ("online", "offline", "maintenance", "syncing")
-            version: Current validator version
-            active_validations: Number of active validations
-            last_sync_block: Last synced block number
-
-        Returns:
-            Message ID or queued ID
-        """
-        try:
-            # Create validator status message
-            message = self._message_factory.create_validator_status(
-                status=status,
-                version=version,
-                active_validations=active_validations,
-                last_sync_block=last_sync_block
-            )
-
-            # Publish to system events topic
-            return await self.publish_to_system_events(message)
-
-        except Exception as e:
-            self.logger.error("Failed to publish validator status: %s", e)
-            raise
-
-    async def publish_allocation_request_event(
-        self,
-        miner_hotkey: str,
-        allocation_uuid: str,
-        request_type: str = "pog_test",
-        device_requirements: dict = None,
-        expected_duration_minutes: int = 10,
-    ) -> str:
-        """
-        High-level method to publish allocation request with error handling.
-
-        Args:
-            miner_hotkey: Target miner's hotkey
-            allocation_uuid: Unique allocation identifier
-            request_type: Type of allocation request
-            device_requirements: Required device specifications dict
-            expected_duration_minutes: Expected allocation duration
-
-        Returns:
-            Message ID or queued ID
-        """
-        try:
-            # Create allocation request message
-            message = self._message_factory.create_allocation_request(
-                miner_hotkey=miner_hotkey,
-                allocation_uuid=allocation_uuid,
-                request_type=request_type,
-                device_requirements=device_requirements,
-                expected_duration_minutes=expected_duration_minutes
-            )
-
-            # Publish to allocation events topic
-            return await self.publish_to_allocation_events(message)
-
-        except Exception as e:
-            self.logger.error("Failed to publish allocation request: %s", e)
             raise
 
     def set_message_callback(self, topic_name: str, callback: Callable):

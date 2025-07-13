@@ -5,20 +5,15 @@ This module provides a convenient factory class for creating properly
 formatted messages for validator-backend communication.
 """
 
-import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
 
 from .message_types import (
     MinerDiscoveryMessage,
     PogResultMessage,
-    AllocationRequestMessage,
-    ValidatorStatusMessage,
     GpuSpecs,
     NetworkInfo,
     BenchmarkData,
-    PerformanceMetrics,
-    DeviceRequirements,
 )
 
 
@@ -136,93 +131,4 @@ class MessageFactory:
             message_type="",  # Will be set in __post_init__
             timestamp=self._get_timestamp(),
             source="validator",
-        )
-
-
-
-    def create_validator_status(
-        self,
-        status: str,
-        version: str,
-        active_validations: int,
-        last_sync_block: Optional[int] = None,
-        performance_metrics: Optional[Dict[str, float]] = None,
-    ) -> ValidatorStatusMessage:
-        """
-        Create a validator status message.
-
-        Args:
-            status: Validator status ("online", "offline", "maintenance", "syncing")
-            version: Current validator version
-            active_validations: Number of active validations
-            last_sync_block: Optional last synced block number
-            performance_metrics: Optional performance metrics dict
-
-        Returns:
-            ValidatorStatusMessage instance
-        """
-        metrics_obj = None
-        if performance_metrics:
-            metrics_obj = PerformanceMetrics(
-                avg_response_time_ms=performance_metrics["avg_response_time_ms"],
-                success_rate_percentage=performance_metrics["success_rate_percentage"],
-                uptime_percentage=performance_metrics["uptime_percentage"],
-            )
-
-        return ValidatorStatusMessage(
-            validator_hotkey=self.validator_hotkey,
-            status=status,
-            version=version,
-            active_validations=active_validations,
-            last_sync_block=last_sync_block,
-            performance_metrics=metrics_obj,
-            message_type="",  # Will be set in __post_init__
-            timestamp=self._get_timestamp(),
-            source="validator",
-        )
-
-    def create_allocation_request(
-        self,
-        miner_hotkey: str,
-        allocation_uuid: str,
-        request_type: str = "pog_test",
-        device_requirements: Optional[Dict[str, Any]] = None,
-        expected_duration_minutes: int = 10,
-        priority: str = "normal",
-    ) -> AllocationRequestMessage:
-        """
-        Create an allocation request message.
-
-        Args:
-            miner_hotkey: The hotkey of the target miner
-            allocation_uuid: Unique allocation identifier
-            request_type: Type of allocation request
-            device_requirements: Required device specifications
-            expected_duration_minutes: Expected allocation duration
-            priority: Request priority
-
-        Returns:
-            AllocationRequestMessage instance
-        """
-        device_req_obj = None
-        if device_requirements:
-            device_req_obj = DeviceRequirements(
-                gpu_count=device_requirements.get("gpu_count", 1),
-                min_vram_gb=device_requirements.get("min_vram_gb", 4),
-                cpu_cores=device_requirements.get("cpu_cores", 1),
-                ram_gb=device_requirements.get("ram_gb", 1),
-                storage_gb=device_requirements.get("storage_gb", 1),
-            )
-
-        return AllocationRequestMessage(
-            validator_hotkey=self.validator_hotkey,
-            miner_hotkey=miner_hotkey,
-            allocation_uuid=allocation_uuid,
-            request_type=request_type,
-            device_requirements=device_req_obj,
-            expected_duration_minutes=expected_duration_minutes,
-            message_type="",  # Will be set in __post_init__
-            timestamp=self._get_timestamp(),
-            source="validator",
-            priority=priority,
         )

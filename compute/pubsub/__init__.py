@@ -32,7 +32,6 @@ Usage:
     # ... same usage as above
 """
 
-from .client import ValidatorPubSubClient
 from .validator_gateway_client import ValidatorGatewayPubSubClient
 from .auth import ValidatorGatewayAuth
 from .message_factory import MessageFactory
@@ -44,7 +43,6 @@ __version__ = "1.0.0"
 __author__ = "SN27 Team"
 
 __all__ = [
-    "ValidatorPubSubClient",
     "ValidatorGatewayPubSubClient",
     "ValidatorGatewayAuth",
     "MessageFactory",
@@ -54,8 +52,6 @@ __all__ = [
     "PublishError",
     # Message types (4 core messages)
     "BasePubSubMessage",
-    "ValidatorStatusMessage",        # 📊 Periodic health and performance reporting
-    "AllocationRequestMessage",      # 🎯 Track allocation requests before they're made
     "PogResultMessage",              # ✅ Report Proof of GPU test results
     "MinerDiscoveryMessage",         # 🔍 Announce new miners joining the network
     "TOPICS",

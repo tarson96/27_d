@@ -7,10 +7,10 @@ including the validator-token-gateway authentication flow.
 
 import logging
 import requests
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from google.oauth2.credentials import Credentials
 
-from .exceptions import AuthenticationError, ConfigurationError
+from .exceptions import AuthenticationError
 
 
 class ValidatorGatewayAuth:
