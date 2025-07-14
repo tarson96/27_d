@@ -144,7 +144,7 @@ def wait_for_port_ready(ssh_client, port=27015, timeout=30, hotkey=""):
             exit_status = stdout.channel.recv_exit_status()
 
             if exit_status == 0:
-                bt.logging.info(f"{hotkey}: Health endpoint on port {port} (path /) is now responding")
+                bt.logging.debug(f"{hotkey}: Health endpoint on port {port} (path /) is now responding")
                 return True
 
         except Exception as e:
@@ -282,12 +282,12 @@ def perform_health_check(axon, miner_info, config_data):
 
         server_ready_timeout = 15
 
-        bt.logging.info(f"{hotkey}: Attempting to confirm health check server's internal readiness via port check.")
+        bt.logging.debug(f"{hotkey}: Attempting to confirm health check server's internal readiness via port check.")
         if not wait_for_port_ready(ssh_client, internal_health_check_port, server_ready_timeout, hotkey):
             bt.logging.error(f"{hotkey}: Health check server failed to start properly - server may have crashed or port is blocked")
             return False
 
-        bt.logging.info(f"{hotkey}: Health check server confirmed internally ready via port check.")
+        bt.logging.debug(f"{hotkey}: Health check server confirmed internally ready via port check.")
 
         external_health_check_port = miner_info.get('fixed_external_user_port', 27015)
         health_check_timeout = 15
