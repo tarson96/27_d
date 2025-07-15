@@ -970,8 +970,6 @@ class Validator:
                     bt.logging.trace(f"{hotkey}: [Step 8] Health check error: {e}")
                     bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check error")
                     return (hotkey, None, 0)
-
-                bt.logging.trace(f"{hotkey}: [Step 8] Health check process completed")
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
                 return (hotkey, None, 0)
