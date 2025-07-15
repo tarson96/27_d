@@ -10,8 +10,9 @@ import paramiko
 import time
 import bittensor as bt
 import requests
+from typing import Optional, Tuple, Dict, Any
 
-def upload_health_check_script(ssh_client, health_check_script_path):
+def upload_health_check_script(ssh_client: paramiko.SSHClient, health_check_script_path: str) -> bool:
     """
     Uploads the health check script to the miner using SFTP.
 
@@ -32,7 +33,7 @@ def upload_health_check_script(ssh_client, health_check_script_path):
         bt.logging.error(f"Failed to upload health check script - SFTP error: {e}")
         return False
 
-def start_health_check_server_background(ssh_client, port=27015, timeout=60):
+def start_health_check_server_background(ssh_client: paramiko.SSHClient, port: int = 27015, timeout: int = 60) -> Tuple[bool, Optional[paramiko.Channel]]:
     """
     Starts the health check server using Paramiko channels.
 
@@ -85,7 +86,7 @@ def start_health_check_server_background(ssh_client, port=27015, timeout=60):
             channel.close()
         return False, None
 
-def read_channel_output(channel, hotkey=""):
+def read_channel_output(channel: paramiko.Channel, hotkey: str = "") -> None:
     """
     Reads and logs *all available* output from the channel's stdout and stderr streams
     without blocking indefinitely. This function is designed to drain the buffers.
@@ -116,7 +117,7 @@ def read_channel_output(channel, hotkey=""):
         bt.logging.trace(f"{hotkey}: Error reading channel output: {e}")
 
 
-def wait_for_port_ready(ssh_client, port=27015, timeout=30, hotkey=""):
+def wait_for_port_ready(ssh_client: paramiko.SSHClient, port: int = 27015, timeout: int = 30, hotkey: str = "") -> bool:
     """
     Waits for a health endpoint to become available using urllib.request.
 
@@ -155,7 +156,7 @@ def wait_for_port_ready(ssh_client, port=27015, timeout=30, hotkey=""):
     bt.logging.error(f"{hotkey}: Health check server not responding on port {port} - server may not be running or port may be blocked by firewall")
     return False
 
-def kill_health_check_server(ssh_client, port=27015):
+def kill_health_check_server(ssh_client: paramiko.SSHClient, port: int = 27015) -> bool:
     """
     Kills the health check server process using PID file.
 
@@ -198,7 +199,7 @@ def kill_health_check_server(ssh_client, port=27015):
         bt.logging.trace(f"Error killing health check server: {e}")
         return False
 
-def wait_for_health_check(host, port, timeout=30, retry_interval=1):
+def wait_for_health_check(host: str, port: int, timeout: int = 30, retry_interval: int = 1) -> bool:
     """
     Waits for the health check server to be available via HTTP.
 
@@ -222,6 +223,7 @@ def wait_for_health_check(host, port, timeout=30, retry_interval=1):
                 return True
             else:
                 bt.logging.error(f"HTTP Health check server returned status code {response.status_code} instead of 200 on {host}:{port}")
+                # Continue to next iteration - don't return here
 
         except requests.exceptions.ConnectionError as e:
             bt.logging.trace(f"HTTP Connection error to {host}:{port}: {e}")
@@ -235,7 +237,7 @@ def wait_for_health_check(host, port, timeout=30, retry_interval=1):
     bt.logging.error(f"External health check failed on {host}:{port} - port may be blocked by firewall or miner is misconfigured")
     return False
 
-def perform_health_check(axon, miner_info, config_data):
+def perform_health_check(axon: Any, miner_info: Dict[str, Any], config_data: Dict[str, Any]) -> bool:
     """
     Performs health check on a miner after POG has finished.
 
@@ -248,9 +250,9 @@ def perform_health_check(axon, miner_info, config_data):
         bool: True if health check is successful, False otherwise
     """
     hotkey = axon.hotkey
-    host = None
-    ssh_client = None
-    channel = None
+    host: Optional[str] = None
+    ssh_client: Optional[paramiko.SSHClient] = None
+    channel: Optional[paramiko.Channel] = None
 
     try:
         host = miner_info['host']
