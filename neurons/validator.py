@@ -959,16 +959,19 @@ class Validator:
                     if health_check_result:
                         bt.logging.success(f"✅ {hotkey}: Health check passed")
                         bt.logging.trace(f"{hotkey}: [Step 8] Health check completed successfully - miner is accessible")
+                        return (hotkey, gpu_name, num_gpus)
                     else:
                         bt.logging.warning(f"⚠️ {hotkey}: Health check failed")
                         bt.logging.trace(f"{hotkey}: [Step 8] Health check failed - miner is not accessible")
+                        bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check failure")
+                        return (hotkey, None, 0)
                 except Exception as e:
                     bt.logging.error(f"❌ {hotkey}: Error during health check: {e}")
                     bt.logging.trace(f"{hotkey}: [Step 8] Health check error: {e}")
+                    bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check error")
+                    return (hotkey, None, 0)
 
                 bt.logging.trace(f"{hotkey}: [Step 8] Health check process completed")
-
-                return (hotkey, gpu_name, num_gpus)
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
                 return (hotkey, None, 0)
