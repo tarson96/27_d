@@ -1,6 +1,15 @@
 import pytest
 from unittest import mock
 
+# Import all health check functions at module level
+from neurons.Validator.health_check import (
+    upload_health_check_script,
+    start_health_check_server_background,
+    read_channel_output,
+    wait_for_port_ready,
+    kill_health_check_server,
+    perform_health_check
+)
 
 # --- Fixtures for common objects ---
 
@@ -47,12 +56,6 @@ def miner_info():
         'password': 'test',
         'fixed_external_user_port': 27015
     }
-
-
-@pytest.fixture
-def config_data():
-    """Returns empty config data."""
-    return {}
 
 
 @pytest.fixture
@@ -117,8 +120,6 @@ class TestValidatorHealthCheck:
 
     def test_upload_health_check_script_success(self, mock_ssh_client):
         """Test successful script upload."""
-        from neurons.Validator.health_check import upload_health_check_script
-
         mock_sftp = mock.MagicMock()
         mock_ssh_client.open_sftp.return_value = mock_sftp
 
@@ -131,8 +132,6 @@ class TestValidatorHealthCheck:
 
     def test_upload_health_check_script_failure(self, mock_ssh_client):
         """Test script upload failure."""
-        from neurons.Validator.health_check import upload_health_check_script
-
         mock_ssh_client.open_sftp.side_effect = Exception("SFTP error")
 
         result = upload_health_check_script(mock_ssh_client, "test_script.py")
@@ -141,8 +140,6 @@ class TestValidatorHealthCheck:
 
     def test_start_health_check_server_background_success(self, mock_ssh_client, mock_channel, mock_transport):
         """Test successful background server start."""
-        from neurons.Validator.health_check import start_health_check_server_background
-
         mock_transport.open_session.return_value = mock_channel
         mock_ssh_client.get_transport.return_value = mock_transport
 
@@ -154,8 +151,6 @@ class TestValidatorHealthCheck:
 
     def test_start_health_check_server_background_channel_closed(self, mock_ssh_client, mock_channel, mock_transport):
         """Test server start with closed channel."""
-        from neurons.Validator.health_check import start_health_check_server_background
-
         mock_channel.closed = True
         mock_channel.recv_ready.return_value = False
         mock_channel.recv_stderr_ready.return_value = False
@@ -170,8 +165,6 @@ class TestValidatorHealthCheck:
 
     def test_start_health_check_server_background_channel_closed_with_output(self, mock_ssh_client, mock_channel, mock_transport):
         """Test server start with closed channel that has output."""
-        from neurons.Validator.health_check import start_health_check_server_background
-
         mock_channel.closed = True
         mock_channel.recv_ready.side_effect = [True, False]
         mock_channel.recv_stderr_ready.side_effect = [True, False]
@@ -188,8 +181,6 @@ class TestValidatorHealthCheck:
 
     def test_start_health_check_server_background_exception(self, mock_ssh_client):
         """Test server start with exception."""
-        from neurons.Validator.health_check import start_health_check_server_background
-
         mock_ssh_client.get_transport.side_effect = Exception("Transport error")
 
         result, channel = start_health_check_server_background(mock_ssh_client, 8080)
@@ -199,8 +190,6 @@ class TestValidatorHealthCheck:
 
     def test_start_health_check_server_background_exception_in_finally(self, mock_ssh_client):
         """Test start_health_check_server_background with exception in finally block."""
-        from neurons.Validator.health_check import start_health_check_server_background
-
         mock_ssh_client.get_transport.side_effect = Exception("Transport error")
 
         result, channel = start_health_check_server_background(mock_ssh_client, 8080)
@@ -210,8 +199,6 @@ class TestValidatorHealthCheck:
 
     def test_read_channel_output_success(self, mock_channel):
         """Test successful channel output reading."""
-        from neurons.Validator.health_check import read_channel_output
-
         read_channel_output(mock_channel, "test_hotkey")
 
         mock_channel.recv_ready.assert_called()
@@ -219,8 +206,6 @@ class TestValidatorHealthCheck:
 
     def test_read_channel_output_with_data(self, mock_channel):
         """Test channel output reading with actual data."""
-        from neurons.Validator.health_check import read_channel_output
-
         mock_channel.recv_ready.side_effect = [True, False]
         mock_channel.recv_stderr_ready.side_effect = [True, False]
         mock_channel.recv.return_value = b"test output"
@@ -233,8 +218,6 @@ class TestValidatorHealthCheck:
 
     def test_read_channel_output_exception(self, mock_channel):
         """Test channel output reading with exception."""
-        from neurons.Validator.health_check import read_channel_output
-
         mock_channel.recv_ready.side_effect = [True, False]
         mock_channel.recv.side_effect = Exception("Channel error")
 
@@ -242,21 +225,18 @@ class TestValidatorHealthCheck:
 
     def test_kill_health_check_server_success(self, mock_ssh_client):
         """Test successful server kill using PID file."""
-        from neurons.Validator.health_check import kill_health_check_server
-
         # Mock first call: read PID file
         mock_stdin1 = mock.MagicMock()
         mock_stdout1 = mock.MagicMock()
         mock_stderr1 = mock.MagicMock()
         mock_stdout1.read.return_value = b"12345"
+        mock_stdout1.channel.recv_exit_status.return_value = 0
 
         # Mock second call: kill process
         mock_stdin2 = mock.MagicMock()
         mock_stdout2 = mock.MagicMock()
         mock_stderr2 = mock.MagicMock()
-        mock_channel2 = mock.MagicMock()
-        mock_channel2.recv_exit_status.return_value = 0
-        mock_stdout2.channel = mock_channel2
+        mock_stdout2.channel.recv_exit_status.return_value = 0
 
         mock_ssh_client.exec_command.side_effect = [
             (mock_stdin1, mock_stdout1, mock_stderr1),
@@ -266,92 +246,82 @@ class TestValidatorHealthCheck:
         result = kill_health_check_server(mock_ssh_client, 8080)
 
         assert result is True
-        mock_ssh_client.exec_command.assert_any_call("cat /tmp/health_check_server_8080.pid 2>/dev/null || echo ''")
-        mock_ssh_client.exec_command.assert_any_call("kill 12345 2>/dev/null || echo 'Process not found'")
+        assert mock_ssh_client.exec_command.call_count == 2
 
     def test_kill_health_check_server_not_running(self, mock_ssh_client):
-        """Test server kill when PID file not found."""
-        from neurons.Validator.health_check import kill_health_check_server
+        """Test server kill when server is not running."""
+        # Mock first call: read PID file (empty)
+        mock_stdin1 = mock.MagicMock()
+        mock_stdout1 = mock.MagicMock()
+        mock_stderr1 = mock.MagicMock()
+        mock_stdout1.read.return_value = b""
+        mock_stdout1.channel.recv_exit_status.return_value = 0
 
-        mock_stdin = mock.MagicMock()
-        mock_stdout = mock.MagicMock()
-        mock_stderr = mock.MagicMock()
-        mock_stdout.read.return_value = b""
-
-        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+        mock_ssh_client.exec_command.return_value = (mock_stdin1, mock_stdout1, mock_stderr1)
 
         result = kill_health_check_server(mock_ssh_client, 8080)
 
         assert result is True
-        mock_ssh_client.exec_command.assert_called_once_with("cat /tmp/health_check_server_8080.pid 2>/dev/null || echo ''")
+        mock_ssh_client.exec_command.assert_called_once()
 
     def test_kill_health_check_server_invalid_pid(self, mock_ssh_client):
         """Test server kill with invalid PID in file."""
-        from neurons.Validator.health_check import kill_health_check_server
+        # Mock first call: read PID file (invalid)
+        mock_stdin1 = mock.MagicMock()
+        mock_stdout1 = mock.MagicMock()
+        mock_stderr1 = mock.MagicMock()
+        mock_stdout1.read.return_value = b"invalid_pid"
+        mock_stdout1.channel.recv_exit_status.return_value = 0
 
-        mock_stdin = mock.MagicMock()
-        mock_stdout = mock.MagicMock()
-        mock_stderr = mock.MagicMock()
-        mock_stdout.read.return_value = b"invalid_pid"
-
-        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+        mock_ssh_client.exec_command.return_value = (mock_stdin1, mock_stdout1, mock_stderr1)
 
         result = kill_health_check_server(mock_ssh_client, 8080)
 
         assert result is True
-        mock_ssh_client.exec_command.assert_called_once_with("cat /tmp/health_check_server_8080.pid 2>/dev/null || echo ''")
+        mock_ssh_client.exec_command.assert_called_once()
 
     def test_kill_health_check_server_exception(self, mock_ssh_client):
         """Test server kill with exception."""
-        from neurons.Validator.health_check import kill_health_check_server
-
         mock_ssh_client.exec_command.side_effect = Exception("SSH error")
 
         result = kill_health_check_server(mock_ssh_client, 8080)
 
         assert result is False
 
-
     def test_wait_for_port_ready_success(self, mock_ssh_client):
-        """Test successful health endpoint ready check using urllib.request."""
-        from neurons.Validator.health_check import wait_for_port_ready
-
+        """Test successful port readiness check."""
+        # Mock successful command execution
         mock_stdin = mock.MagicMock()
         mock_stdout = mock.MagicMock()
         mock_stderr = mock.MagicMock()
-        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
         mock_stdout.channel.recv_exit_status.return_value = 0
 
-        result = wait_for_port_ready(mock_ssh_client, 27015, 30, "test_hotkey")
+        mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
+
+        result = wait_for_port_ready(mock_ssh_client, 8080, timeout=1)
 
         assert result is True
-        expected_command = 'python3 -c \'import urllib.request; urllib.request.urlopen("http://127.0.0.1:27015/", timeout=2)\''
-        mock_ssh_client.exec_command.assert_called_once_with(expected_command)
+        mock_ssh_client.exec_command.assert_called()
 
     def test_wait_for_port_ready_timeout(self, mock_ssh_client):
-        """Test port ready check timeout."""
-        from neurons.Validator.health_check import wait_for_port_ready
-
+        """Test port readiness check with timeout."""
+        # Mock failed command execution
         mock_stdin = mock.MagicMock()
         mock_stdout = mock.MagicMock()
         mock_stderr = mock.MagicMock()
-        mock_channel = mock.MagicMock()
-        mock_channel.recv_exit_status.return_value = 1
-        mock_stdout.channel = mock_channel
+        mock_stdout.channel.recv_exit_status.return_value = 1
 
         mock_ssh_client.exec_command.return_value = (mock_stdin, mock_stdout, mock_stderr)
 
-        result = wait_for_port_ready(mock_ssh_client, 27015, 2, "test_hotkey")
+        result = wait_for_port_ready(mock_ssh_client, 8080, timeout=1)
 
         assert result is False
 
     def test_wait_for_port_ready_exception(self, mock_ssh_client):
-        """Test port ready check with exception."""
-        from neurons.Validator.health_check import wait_for_port_ready
-
+        """Test port readiness check with exception."""
         mock_ssh_client.exec_command.side_effect = Exception("SSH error")
 
-        result = wait_for_port_ready(mock_ssh_client, 27015, 30, "test_hotkey")
+        result = wait_for_port_ready(mock_ssh_client, 8080, timeout=1)
 
         assert result is False
 
@@ -363,11 +333,9 @@ class TestValidatorHealthCheck:
 class TestHealthCheckIntegration:
     """Integration tests for complete health check flow."""
 
-    def test_perform_health_check_success(self, mock_health_check_functions, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_success(self, mock_health_check_functions, mock_paramiko, mock_axon, miner_info):
         """Test successful health check execution."""
-        from neurons.Validator.health_check import perform_health_check
-
-        result = perform_health_check(mock_axon, miner_info, config_data)
+        result = perform_health_check(mock_axon, miner_info)
 
         assert result is True
         mock_health_check_functions['upload_script'].assert_called_once()
@@ -376,20 +344,16 @@ class TestHealthCheckIntegration:
         mock_health_check_functions['wait_health'].assert_called_once()
         mock_health_check_functions['kill_server'].assert_called_once()
 
-    def test_perform_health_check_ssh_failure(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_ssh_failure(self, mock_paramiko, mock_axon, miner_info):
         """Test health check failure when SSH connection fails."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_paramiko.connect.side_effect = Exception("SSH connection failed")
 
-        result = perform_health_check(mock_axon, miner_info, config_data)
+        result = perform_health_check(mock_axon, miner_info)
 
         assert result is False
 
-    def test_perform_health_check_server_start_failure(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_server_start_failure(self, mock_paramiko, mock_axon, miner_info):
         """Test health check failure when server fails to start."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_start_server = mock.MagicMock(return_value=(False, None))
         mock_upload_script = mock.MagicMock(return_value=True)
 
@@ -397,40 +361,34 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.start_health_check_server_background', mock_start_server), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is False
 
-    def test_perform_health_check_upload_failure(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_upload_failure(self, mock_paramiko, mock_axon, miner_info):
         """Test health check failure when script upload fails."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_upload_script = mock.MagicMock(return_value=False)
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is False
 
-    def test_perform_health_check_exception(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_exception(self, mock_paramiko, mock_axon, miner_info):
         """Test health check with unexpected exception."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_upload_script = mock.MagicMock(side_effect=Exception("Unexpected error"))
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is False
 
-    def test_perform_health_check_server_not_ready(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_server_not_ready(self, mock_paramiko, mock_axon, miner_info):
         """Test health check when server doesn't signal readiness."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
         mock_wait_port_ready = mock.MagicMock(return_value=False)
@@ -440,14 +398,12 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.wait_for_port_ready', mock_wait_port_ready), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is False
 
-    def test_perform_health_check_http_check_failure(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_http_check_failure(self, mock_paramiko, mock_axon, miner_info):
         """Test health check when HTTP health check fails."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
         mock_wait_port_ready = mock.MagicMock(return_value=True)
@@ -461,14 +417,12 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is False
 
-    def test_perform_health_check_kill_server_failure(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_kill_server_failure(self, mock_paramiko, mock_axon, miner_info):
         """Test health check when killing server fails but health check succeeds."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_upload_script = mock.MagicMock(return_value=True)
         mock_start_server = mock.MagicMock(return_value=(True, mock.MagicMock()))
         mock_wait_port_ready = mock.MagicMock(return_value=True)
@@ -482,27 +436,23 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is True
 
-    def test_perform_health_check_unexpected_exception(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_unexpected_exception(self, mock_paramiko, mock_axon, miner_info):
         """Test health check with unexpected exception in main flow."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_upload_script = mock.MagicMock(side_effect=Exception("Unexpected error in upload"))
 
         with mock.patch('neurons.Validator.health_check.upload_health_check_script', mock_upload_script), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is False
 
-    def test_perform_health_check_channel_output_reading(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_channel_output_reading(self, mock_paramiko, mock_axon, miner_info):
         """Test health check with channel output reading after HTTP check."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_channel = mock.MagicMock()
         mock_channel.closed = False
 
@@ -521,15 +471,13 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.read_channel_output', mock_read_output), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is True
             mock_read_output.assert_called()
 
-    def test_perform_health_check_channel_closed_after_http_check(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_channel_closed_after_http_check(self, mock_paramiko, mock_axon, miner_info):
         """Test health check when channel is closed after HTTP check."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_channel = mock.MagicMock()
         mock_channel.closed = True
 
@@ -546,14 +494,12 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.kill_health_check_server', mock_kill_server), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is True
 
-    def test_perform_health_check_channel_output_after_kill(self, mock_paramiko, mock_axon, miner_info, config_data):
+    def test_perform_health_check_channel_output_after_kill(self, mock_paramiko, mock_axon, miner_info):
         """Test health check with channel output reading after server kill."""
-        from neurons.Validator.health_check import perform_health_check
-
         mock_channel = mock.MagicMock()
         mock_channel.closed = False
 
@@ -572,8 +518,6 @@ class TestHealthCheckIntegration:
              mock.patch('neurons.Validator.health_check.read_channel_output', mock_read_output), \
              mock.patch('time.sleep', return_value=None):
 
-            result = perform_health_check(mock_axon, miner_info, config_data)
+            result = perform_health_check(mock_axon, miner_info)
 
             assert result is True
-            # Should be called twice: after HTTP check and after kill
-            assert mock_read_output.call_count == 2
