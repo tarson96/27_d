@@ -10,7 +10,7 @@ import paramiko
 import time
 import bittensor as bt
 import requests
-from typing import Optional, Tuple, Dict, Any
+from typing import Tuple
 
 def upload_health_check_script(ssh_client: paramiko.SSHClient, health_check_script_path: str) -> bool:
     """
@@ -33,7 +33,7 @@ def upload_health_check_script(ssh_client: paramiko.SSHClient, health_check_scri
         bt.logging.error(f"Failed to upload health check script - SFTP error: {e}")
         return False
 
-def start_health_check_server_background(ssh_client: paramiko.SSHClient, port: int = 27015, timeout: int = 60) -> Tuple[bool, Optional[paramiko.Channel]]:
+def start_health_check_server_background(ssh_client: paramiko.SSHClient, port: int = 27015, timeout: int = 60) -> Tuple[bool, paramiko.Channel | None]:
     """
     Starts the health check server using Paramiko channels.
 
@@ -237,7 +237,7 @@ def wait_for_health_check(host: str, port: int, timeout: int = 30, retry_interva
     bt.logging.error(f"External health check failed on {host}:{port} - port may be blocked by firewall or miner is misconfigured")
     return False
 
-def perform_health_check(axon: Any, miner_info: Dict[str, Any], config_data: Dict[str, Any]) -> bool:
+def perform_health_check(axon: bt.AxonInfo, miner_info: dict, config_data: dict) -> bool:
     """
     Performs health check on a miner after POG has finished.
 
@@ -250,9 +250,9 @@ def perform_health_check(axon: Any, miner_info: Dict[str, Any], config_data: Dic
         bool: True if health check is successful, False otherwise
     """
     hotkey = axon.hotkey
-    host: Optional[str] = None
-    ssh_client: Optional[paramiko.SSHClient] = None
-    channel: Optional[paramiko.Channel] = None
+    host: str | None = None
+    ssh_client: paramiko.SSHClient | None = None
+    channel: paramiko.Channel | None = None
 
     try:
         host = miner_info['host']

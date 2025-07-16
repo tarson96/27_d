@@ -35,8 +35,6 @@ import bittensor as bt
 import math
 import time
 import paramiko
-import requests
-
 import cryptography
 import torch
 from cryptography.fernet import Fernet
