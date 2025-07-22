@@ -753,6 +753,10 @@ class Validator:
                                     "num_gpus": result[2]
                                 }
                             update_pog_stats(self.db, hotkey, result[1], result[2])
+                        elif result[1] is None and result[2] == -1:
+                            # Health check failed - don't retry
+                            bt.logging.info(f"❌ {hotkey}: Health check failed, skipping retry")
+                            update_pog_stats(self.db, hotkey, None, None)
                         else:
                             raise RuntimeError("GPU test failed")
                     except asyncio.TimeoutError:
@@ -962,12 +966,12 @@ class Validator:
                         bt.logging.warning(f"⚠️ {hotkey}: Health check failed")
                         bt.logging.trace(f"{hotkey}: [Step 8] Health check failed - miner is not accessible")
                         bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check failure")
-                        return (hotkey, None, 0)
+                        return (hotkey, None, -1)  # Use -1 to indicate health check failure
                 except Exception as e:
                     bt.logging.error(f"❌ {hotkey}: Error during health check: {e}")
                     bt.logging.trace(f"{hotkey}: [Step 8] Health check error: {e}")
                     bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check error")
-                    return (hotkey, None, 0)
+                    return (hotkey, None, -1)  # Use -1 to indicate health check failure
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
                 return (hotkey, None, 0)
