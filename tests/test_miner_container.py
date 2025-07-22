@@ -227,6 +227,128 @@ class TestRunContainer:
         assert result["message"]
         assert result["info"] == expected_info
 
+    def test_run_container_port_configuration(
+        self,
+        mock_container_build,
+        mock_get_docker,
+        docker_client,
+        new_container,
+        mock_run_container,
+        mock_open_fn,
+    ):
+        """
+        Test that verifies the external port configuration is correctly propagated to container.run arguments.
+        This test ensures that the fixed_external_user_port from docker_requirement is properly mapped
+        to the container's port configuration.
+        """
+        # Prepare input parameters with specific port configuration
+        cpu_usage = {"assignment": "0-1"}
+        ram_usage = {"capacity": "5g"}
+        hard_disk_usage = {"capacity": "100g"}
+        gpu_usage = {"capacity": "all"}
+        public_key = "dummy_public_key"
+        docker_requirement = {
+            "base_image": "dummy_base",
+            "volume_path": "/dummy/volume",
+            "ssh_key": "dummy_ssh_key",
+            "ssh_port": 2222,
+            "fixed_external_user_port": 8000,  # Specific external port to test
+            "dockerfile": ""
+        }
+        testing = True
+
+        # Call run_container
+        result = run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage,
+                               public_key, docker_requirement, testing)
+
+        # Verify that the image was built and container was run
+        docker_client.images.build.assert_called_once()
+        docker_client.containers.run.assert_called_once()
+
+        # Verify container configuration
+        _, kwargs = docker_client.containers.run.call_args
+        assert kwargs.get("name") == "test_container"  # testing=True
+        assert kwargs.get("detach") is True
+        assert kwargs.get("init") is True
+
+        # Verify port mapping - this is the key test
+        actual_ports = kwargs.get("ports", {})
+        assert 22 in actual_ports  # SSH port
+        assert actual_ports[22] == 2222  # SSH port mapping
+        assert 27015 in actual_ports  # Internal user port (INTERNAL_USER_PORT)
+        assert actual_ports[27015] == 8000  # External port from docker_requirement
+
+        # Verify file operations
+        mock_open_fn.assert_called_with('allocation_key', 'w')
+
+        # Verify result structure
+        expected_info = base64.b64encode(b"encrypted_data").decode("utf-8")
+        assert result
+        assert result["status"] is True
+        assert result["message"] == "Container started successfully."
+        assert result["info"] == expected_info
+
+    def test_run_container_default_port_configuration(
+        self,
+        mock_container_build,
+        mock_get_docker,
+        docker_client,
+        new_container,
+        mock_run_container,
+        mock_open_fn,
+    ):
+        """
+        Test that verifies the default port configuration when fixed_external_user_port is not specified.
+        This test ensures that when no external port is provided, the default behavior is maintained.
+        """
+        # Prepare input parameters without fixed_external_user_port
+        cpu_usage = {"assignment": "0-1"}
+        ram_usage = {"capacity": "5g"}
+        hard_disk_usage = {"capacity": "100g"}
+        gpu_usage = {"capacity": "all"}
+        public_key = "dummy_public_key"
+        docker_requirement = {
+            "base_image": "dummy_base",
+            "volume_path": "/dummy/volume",
+            "ssh_key": "dummy_ssh_key",
+            "ssh_port": 2222,
+            # No fixed_external_user_port specified - should use default
+            "dockerfile": ""
+        }
+        testing = True
+
+        # Call run_container
+        result = run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage,
+                               public_key, docker_requirement, testing)
+
+        # Verify that the image was built and container was run
+        docker_client.images.build.assert_called_once()
+        docker_client.containers.run.assert_called_once()
+
+        # Verify container configuration
+        _, kwargs = docker_client.containers.run.call_args
+        assert kwargs.get("name") == "test_container"  # testing=True
+        assert kwargs.get("detach") is True
+        assert kwargs.get("init") is True
+
+        # Verify port mapping with default behavior
+        actual_ports = kwargs.get("ports", {})
+        assert 22 in actual_ports  # SSH port
+        assert actual_ports[22] == 2222  # SSH port mapping
+        assert 27015 in actual_ports  # Internal user port (INTERNAL_USER_PORT)
+        # When no fixed_external_user_port is specified, it should be None
+        assert actual_ports[27015] is None
+
+        # Verify file operations
+        mock_open_fn.assert_called_with('allocation_key', 'w')
+
+        # Verify result structure
+        expected_info = base64.b64encode(b"encrypted_data").decode("utf-8")
+        assert result
+        assert result["status"] is True
+        assert result["message"] == "Container started successfully."
+        assert result["info"] == expected_info
+
 
 class TestCheckContainer:
     def test_check_container_running(self, mock_get_docker, running_container):
