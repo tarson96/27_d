@@ -6,7 +6,6 @@ formatted messages for validator-backend communication.
 """
 
 from datetime import datetime
-from typing import Optional, Dict, Any
 
 from .message_types import (
     MinerDiscoveryMessage,
@@ -36,11 +35,11 @@ class MessageFactory:
     def create_miner_discovery(
         self,
         miner_hotkey: str,
-        gpu_specs: Dict[str, Any],
-        network_info: Optional[Dict[str, Any]] = None,
-        registration_block: Optional[int] = None,
-        initial_benchmark_score: Optional[float] = None,
-        discovered_at: Optional[datetime] = None,
+        gpu_specs: dict,
+        network_info: dict | None = None,
+        registration_block: int | None = None,
+        initial_benchmark_score: float | None = None,
+        discovered_at: datetime | None = None,
     ) -> MinerDiscoveryMessage:
         """
         Create a new miner discovery message.
@@ -83,17 +82,15 @@ class MessageFactory:
             source="validator",
         )
 
-
-
     def create_pog_result(
         self,
         miner_hotkey: str,
         request_id: str,
         result: str,
         validation_duration_seconds: float,
-        score: Optional[float] = None,
-        benchmark_data: Optional[Dict[str, float]] = None,
-        error_details: Optional[str] = None,
+        score: float | None = None,
+        benchmark_data: dict | None = None,
+        error_details: str | None = None,
     ) -> PogResultMessage:
         """
         Create a PoG result message.

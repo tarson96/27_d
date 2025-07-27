@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Optional, Callable, Dict, Any
+from typing import Callable
 from google.cloud import pubsub_v1
 from google.api_core import exceptions as gcp_exceptions
 
@@ -52,13 +52,13 @@ class ValidatorGatewayPubSubClient:
         self.auth = ValidatorGatewayAuth(wallet, config)
 
         # Initialize clients
-        self.publisher: Optional[pubsub_v1.PublisherClient] = None
-        self.subscriber: Optional[pubsub_v1.SubscriberClient] = None
-        self._topic_paths: Dict[str, str] = {}
+        self.publisher: pubsub_v1.PublisherClient | None = None
+        self.subscriber: pubsub_v1.SubscriberClient | None = None
+        self._topic_paths: dict = {}
 
         # Subscription management
-        self.subscription_futures: Dict[str, Any] = {}
-        self._message_callbacks: Dict[str, Callable] = {}
+        self.subscription_futures: dict = {}
+        self._message_callbacks: dict = {}
 
         # Message queues for reliable publishing
         self.queues = {
@@ -69,7 +69,7 @@ class ValidatorGatewayPubSubClient:
         }
 
         # Background workers for processing queues
-        self._queue_workers: Dict[str, asyncio.Task] = {}
+        self._queue_workers: dict[str, asyncio.Task] = {}
         self._worker_shutdown = asyncio.Event()
 
         # Pre-populate topic paths (these don't require authentication)
@@ -173,7 +173,7 @@ class ValidatorGatewayPubSubClient:
         try:
             asyncio.get_running_loop()
             # We're in an async context, create tasks
-            for topic_name in self.queues.keys():
+            for topic_name in self.queues:
                 worker = asyncio.create_task(self._queue_worker(topic_name))
                 self._queue_workers[topic_name] = worker
                 self.logger.info("Started queue worker for %s", topic_name)
@@ -184,7 +184,7 @@ class ValidatorGatewayPubSubClient:
     async def _ensure_workers_started(self):
         """Ensure queue workers are started."""
         if not self._queue_workers:
-            for topic_name in self.queues.keys():
+            for topic_name in self.queues:
                 worker = asyncio.create_task(self._queue_worker(topic_name))
                 self._queue_workers[topic_name] = worker
 
@@ -392,7 +392,7 @@ class ValidatorGatewayPubSubClient:
     async def subscribe_to_messages_topic(
         self,
         topic_name: str,
-        subscription_name_suffix: Optional[str] = None,
+        subscription_name_suffix: str | None = None,
     ):
         """
         Subscribe to the pub sub topic.
@@ -457,7 +457,7 @@ class ValidatorGatewayPubSubClient:
             except Exception as e:
                 self.logger.error("Error stopping subscription: %s", e)
 
-    def get_queue_status(self) -> Dict[str, int]:
+    def get_queue_status(self) -> dict:
         """Get current queue sizes."""
         return {topic: queue.qsize() for topic, queue in self.queues.items()}
 
@@ -491,8 +491,6 @@ class ValidatorGatewayPubSubClient:
             if remaining > 0:
                 self.logger.warning("Closing with %d unpublished messages: %s", remaining, queue_status)
 
-        if self.publisher:
-            self.publisher.close()
         if self.subscriber:
             self.subscriber.close()
 

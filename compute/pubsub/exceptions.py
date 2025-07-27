@@ -18,11 +18,6 @@ class PublishError(PubSubError):
     pass
 
 
-class ConnectionError(PubSubError):
-    """Raised when connection to pub/sub service fails."""
-    pass
-
-
 class AuthenticationError(PubSubError):
     """Raised when authentication with GCP fails."""
     pass

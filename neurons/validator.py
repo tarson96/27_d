@@ -905,8 +905,6 @@ class Validator:
             host = miner_info['host']
             bt.logging.debug(f"{hotkey}: Allocated Miner for testing.")
 
-
-
             # Step 2: Connect via SSH
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())

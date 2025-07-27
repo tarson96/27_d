@@ -7,7 +7,6 @@ including the validator-token-gateway authentication flow.
 
 import logging
 import requests
-from typing import Optional, Dict
 from google.oauth2.credentials import Credentials
 
 from .exceptions import AuthenticationError
@@ -35,24 +34,24 @@ class ValidatorGatewayAuth:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        self.jwt_token: Optional[str] = None
-        self.pubsub_token: Optional[str] = None
-        self._credentials: Optional[Credentials] = None
+        self.jwt_token: str | None = None
+        self.pubsub_token: str | None = None
+        self._credentials: Credentials | None = None
 
-    def _get_network_config(self) -> Dict[str, str]:
+    def _get_network_config(self) -> dict:
         """Get domain and project ID for current network."""
         if self.config.subtensor.network == "finney":
-            return {
-                "domain": "https://validator-token-gateway-auth-production-pufph5srwa-uc.a.run.app",
-                "project_id": "ni-sn27-frontend"
-            }
+            project_id = "ni-sn27-frontend-prod"
+            env = "production"
         else:
-            return {
-                "domain": "https://validator-token-gateway-auth-development-pufph5srwa-uc.a.run.app",
-                "project_id": "ni-sn27-frontend-dev"
-            }
+            project_id = "ni-sn27-frontend-dev"
+            env = "development"
+        return {
+            "domain": f"https://us-central1-{project_id}.cloudfunctions.net/validator-token-gateway-auth-{env}",
+            "project_id": project_id
+        }
 
-    def _authenticate_validator_gateway(self) -> Optional[str]:
+    def _authenticate_validator_gateway(self) -> str | None:
         """Authenticate with validator-token-gateway to get JWT token."""
         try:
             # Message to sign
@@ -69,17 +68,21 @@ class ValidatorGatewayAuth:
 
             response = requests.post(
                 f"{domain}/auth/token",
-                headers={"Authorization": auth_header}
+                headers={"Authorization": auth_header},
+                timeout=30
             )
             response.raise_for_status()
             jwt_token = response.json().get("access_token")
-            self.logger.info(f"Successfully authenticated with validator-token-gateway on {self.config.subtensor.network} network")
+            self.logger.info(
+                "Successfully authenticated with validator-token-gateway on %s network",
+                self.config.subtensor.network
+            )
             return jwt_token
         except Exception as e:
-            self.logger.error(f"Failed to authenticate with validator-token-gateway: {e}")
-            raise AuthenticationError(f"Failed to authenticate with validator-token-gateway: {e}")
+            self.logger.error("Failed to authenticate with validator-token-gateway: %s", e)
+            raise AuthenticationError(f"Failed to authenticate with validator-token-gateway: {e}") from e
 
-    def _get_pubsub_token(self) -> Optional[str]:
+    def _get_pubsub_token(self) -> str | None:
         """Get Google Cloud Pub/Sub impersonation token."""
         if not self.jwt_token:
             raise AuthenticationError("Cannot get Pub/Sub token: No JWT token available")
@@ -91,15 +94,19 @@ class ValidatorGatewayAuth:
         try:
             response = requests.post(
                 f"{domain}/auth/pubsub-token",
-                headers={"Authorization": f"Bearer {self.jwt_token}"}
+                headers={"Authorization": f"Bearer {self.jwt_token}"},
+                timeout=30
             )
             response.raise_for_status()
             pubsub_token = response.json().get("access_token")
-            self.logger.info(f"Successfully obtained Pub/Sub impersonation token for {self.config.subtensor.network} network")
+            self.logger.info(
+                "Successfully obtained Pub/Sub impersonation token for %s network",
+                self.config.subtensor.network
+            )
             return pubsub_token
         except Exception as e:
-            self.logger.error(f"Failed to get Pub/Sub token: {e}")
-            raise AuthenticationError(f"Failed to get Pub/Sub token: {e}")
+            self.logger.error("Failed to get Pub/Sub token: %s", e)
+            raise AuthenticationError(f"Failed to get Pub/Sub token: {e}") from e
 
     def get_credentials(self, refresh: bool = False) -> Credentials:
         """
@@ -127,7 +134,7 @@ class ValidatorGatewayAuth:
 
             return self._credentials
         except Exception as e:
-            raise AuthenticationError(f"Failed to create credentials: {e}")
+            raise AuthenticationError(f"Failed to create credentials: {e}") from e
 
     def get_project_id(self) -> str:
         """Get the project ID for the current network."""

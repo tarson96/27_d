@@ -5,8 +5,9 @@ This module contains all the message schemas and constants used for
 communication between validators and the SN27 backend.
 """
 
-from typing import Dict, Any, Optional, Literal, Union
+from typing import Literal
 from dataclasses import dataclass, field
+
 
 # Topic constants
 class TOPICS:
@@ -15,11 +16,13 @@ class TOPICS:
     SYSTEM_EVENTS = "system-events"
     VALIDATION_EVENTS = "validation-events"
 
+
 # Message type constants
 class MESSAGE_TYPES:
     # Validator → Backend messages (2 core messages)
     POG_RESULT = "pog_result"
     MINER_DISCOVERY = "miner_discovery"
+
 
 # Base message structure
 @dataclass
@@ -27,11 +30,11 @@ class BasePubSubMessage:
     message_type: str = field(default_factory=str)
     timestamp: str = field(default_factory=str)
     source: Literal["validator", "backend"] = field(default="validator")
-    priority: Optional[Literal["low", "normal", "high", "urgent"]] = "normal"
-    correlation_id: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None
+    priority: Literal["low", "normal", "high", "urgent"] | None = "normal"
+    correlation_id: str | None = None
+    data: dict | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict:
         """Convert message to dictionary for JSON serialization."""
         result = {
             "message_type": self.message_type,
@@ -47,6 +50,7 @@ class BasePubSubMessage:
 
 # Validator → Backend message types
 
+
 @dataclass
 class GpuSpecs:
     model: str
@@ -54,11 +58,13 @@ class GpuSpecs:
     cpu_cores: int
     ram_gb: int
 
+
 @dataclass
 class NetworkInfo:
-    ip_address: Optional[str] = None
-    port: Optional[int] = None
-    region: Optional[str] = None
+    ip_address: str | None = None
+    port: int | None = None
+    region: str | None = None
+
 
 @dataclass
 class MinerDiscoveryMessage(BasePubSubMessage):
@@ -69,8 +75,8 @@ class MinerDiscoveryMessage(BasePubSubMessage):
     gpu_specs: GpuSpecs = field(default_factory=GpuSpecs)
     network_info: NetworkInfo = field(default_factory=NetworkInfo)
     # Optional fields last
-    registration_block: Optional[int] = None
-    initial_benchmark_score: Optional[float] = None
+    registration_block: int | None = None
+    initial_benchmark_score: float | None = None
 
     def __post_init__(self):
         self.message_type = MESSAGE_TYPES.MINER_DISCOVERY
@@ -96,12 +102,14 @@ class MinerDiscoveryMessage(BasePubSubMessage):
         if self.initial_benchmark_score is not None:
             self.data["initial_benchmark_score"] = self.initial_benchmark_score
 
+
 @dataclass
 class BenchmarkData:
     gpu_utilization: float
     memory_usage: float
     compute_performance: float
     network_latency: float
+
 
 @dataclass
 class PogResultMessage(BasePubSubMessage):
@@ -112,9 +120,9 @@ class PogResultMessage(BasePubSubMessage):
     result: Literal["success", "failure", "timeout", "error"] = field(default="error")
     validation_duration_seconds: float = field(default_factory=float)
     # Optional fields last
-    score: Optional[float] = None
-    benchmark_data: Optional[BenchmarkData] = None
-    error_details: Optional[str] = None
+    score: float | None = None
+    benchmark_data: BenchmarkData | None = None
+    error_details: str | None = None
 
     def __post_init__(self):
         self.message_type = MESSAGE_TYPES.POG_RESULT
@@ -138,8 +146,8 @@ class PogResultMessage(BasePubSubMessage):
         if self.error_details:
             self.data["error_details"] = self.error_details
 
+
 # Union type for all validator messages (2 core messages)
-ValidatorMessage = Union[
-    PogResultMessage,                 # ✅ Report Proof of GPU test results
-    MinerDiscoveryMessage,            # 🔍 Announce new miners joining the network
-]
+# PogResultMessage,                 # ✅ Report Proof of GPU test results
+# MinerDiscoveryMessage,            # 🔍 Announce new miners joining the network
+ValidatorMessage = PogResultMessage | MinerDiscoveryMessage
