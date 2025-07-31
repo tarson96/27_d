@@ -32,9 +32,8 @@ import bittensor as bt
 import time
 import paramiko
 
-import cryptography
 import torch
-from torch._C._te import Tensor # type: ignore
+from torch._C._te import Tensor  # type: ignore
 import RSAEncryption as rsa
 import concurrent.futures
 from collections import defaultdict
@@ -82,6 +81,7 @@ from neurons.Validator.database.pog import (
     write_stats,
 )
 from neurons.Validator.health_check import perform_health_check
+
 
 class Validator:
     blocks_done: set = set()
@@ -189,9 +189,6 @@ class Validator:
             timeout=30.0,
             auto_refresh_interval=600  # 30 minutes
         )
-
-        # Track known miners for discovery publishing
-        self.known_miners = set()
 
         # Initialize the local db
         self.db = ComputeDb()
@@ -580,49 +577,15 @@ class Validator:
     def get_valid_tensors(self, metagraph):
         tensors = []
         self.total_current_miners = 0
-        newly_discovered_miners = []
-
         for uid in metagraph.uids:
             neuron = metagraph.neurons[uid]
 
             if neuron.axon_info.ip != "0.0.0.0" and not self.is_blacklisted(neuron=neuron):
                 self.total_current_miners += 1
                 tensors.append(True)
-
-                # Check if this is a newly discovered miner
-                if neuron.hotkey not in self.known_miners:
-                    self.known_miners.add(neuron.hotkey)
-                    newly_discovered_miners.append(neuron)
             else:
                 tensors.append(False)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        # Publish discovery messages for new miners
-        for neuron in newly_discovered_miners:
-            loop.run_until_complete(self._publish_miner_discovery_async(neuron))
         return tensors
-
-    async def _publish_miner_discovery_async(self, neuron):
-        """Helper method to publish miner discovery asynchronously."""
-        await self.pubsub_client.publish_miner_discovery_event(
-            miner_hotkey=neuron.hotkey,
-            gpu_specs={
-                "model": "Unknown",  # Will be updated after POG test
-                "vram_gb": 0,
-                "cpu_cores": 0,
-                "ram_gb": 0
-            },
-            network_info={
-                "ip_address": neuron.axon_info.ip,
-                "port": neuron.axon_info.port,
-                "region": None
-            },
-            registration_block=self.current_block
-        )
-        bt.logging.info(f"Published miner discovery for newly detected miner: {neuron.hotkey}")
 
     def get_valid_queryable(self):
         valid_queryable = []
@@ -874,6 +837,22 @@ class Validator:
             bt.logging.error(f"Proof-of-GPU task failed: {e}")
             self.gpu_task = None
 
+    async def _publish_pog_result_event(
+        self, hotkey, request_id, start_time, result,
+        health_check_result: bool | None = None,
+        error_details: str | None = None,
+    ):
+        # Publish successful POG result
+        validation_duration = time.time() - start_time
+        await self.pubsub_client.publish_pog_result_event(
+            miner_hotkey=hotkey,
+            request_id=request_id,
+            result=result,
+            validation_duration=validation_duration,
+            health_check_result=health_check_result,
+            error_details=error_details
+        )
+
     async def test_miner_gpu(self, axon, config_data):
         """
         Allocate, test, and deallocate a single miner.
@@ -886,7 +865,7 @@ class Validator:
         hotkey = axon.hotkey
         request_id = str(uuid.uuid4())
         start_time = time.time()
-        bt.logging.debug(f"{hotkey}: Starting miner test.")
+        bt.logging.debug("%s: Starting miner test.", hotkey)
 
         try:
             # Step 0: Init
@@ -894,7 +873,7 @@ class Validator:
             gpu_tolerance_pairs = gpu_data.get("gpu_tolerance_pairs", {})
             # Extract Merkle Proof Settings
             merkle_proof = config_data["merkle_proof"]
-            time_tol = merkle_proof.get("time_tolerance",5)
+            time_tol = merkle_proof.get("time_tolerance", 5)
             # Extract miner_script path
             miner_script_path = merkle_proof["miner_script_path"]
 
@@ -903,82 +882,90 @@ class Validator:
             private_key, public_key = rsa.generate_key_pair()
             allocation_response = await self.allocate_miner(axon, private_key, public_key)
             if not allocation_response:
-                bt.logging.info(f"🌀 {hotkey}: Busy or not allocatable.")
+                bt.logging.info("🌀 %s: Busy or not allocatable.", hotkey)
                 return (hotkey, None, 0)
             allocation_status = True
             miner_info = allocation_response
             host = miner_info['host']
-            bt.logging.debug(f"{hotkey}: Allocated Miner for testing.")
+            bt.logging.debug("%s: Allocated Miner for testing.", hotkey)
 
             # Step 2: Connect via SSH
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            bt.logging.debug(f"{hotkey}: Connect to Miner via SSH.")
-            ssh_client.connect(host, port=miner_info.get('port', 22), username=miner_info['username'], password=miner_info['password'], timeout=10)
+            bt.logging.debug("%s: Connect to Miner via SSH.", hotkey)
+            ssh_client.connect(
+                host,
+                port=miner_info.get('port', 22),
+                username=miner_info['username'],
+                password=miner_info['password'],
+                timeout=10,
+            )
             if not (ssh_client):
                 ssh_client.close()
-                bt.logging.info(f"{hotkey}: SSH connection failed.")
+                bt.logging.info("%s: SSH connection failed.", hotkey)
                 return (hotkey, None, -1)
-            bt.logging.debug(f"{hotkey}: Connected to Miner via SSH.")
+            bt.logging.debug("%s: Connected to Miner via SSH.", hotkey)
 
             # Step 3: Hash Check
             local_hash = compute_script_hash(miner_script_path)
-            bt.logging.debug(f"{hotkey}: [Step 1] Local script hash computed successfully.")
-            bt.logging.trace(f"{hotkey}: Local Hash: {local_hash}")
+            bt.logging.debug("%s: [Step 1] Local script hash computed successfully.", hotkey)
+            bt.logging.trace("%s: Local Hash: %s", hotkey, local_hash)
             remote_hash = send_script_and_request_hash(ssh_client, miner_script_path)
             if local_hash != remote_hash:
-                bt.logging.info(f"{hotkey}: [Integrity Check] FAILURE: Hash mismatch detected.")
-                raise ValueError(f"{hotkey}: Script integrity verification failed.")
+                bt.logging.info("%s: [Integrity Check] FAILURE: Hash mismatch detected.", hotkey)
+                raise ValueError("%s: Script integrity verification failed.")
 
             # Step 4: Get GPU info NVIDIA from the remote miner
-            bt.logging.debug(f"{hotkey}: [Step 4] Retrieving GPU information (NVIDIA driver) from miner...")
+            bt.logging.debug("%s: [Step 4] Retrieving GPU information (NVIDIA driver) from miner...", hotkey)
             gpu_info = get_remote_gpu_info(ssh_client)
             num_gpus_reported = gpu_info["num_gpus"]
             gpu_name_reported = gpu_info["gpu_names"][0] if num_gpus_reported > 0 else None
-            bt.logging.debug(f"{hotkey}: [Step 4] Reported GPU Information:")
+            bt.logging.debug("%s: [Step 4] Reported GPU Information:", hotkey)
             if num_gpus_reported > 0:
-                bt.logging.debug(f"{hotkey}: Number of GPUs: {num_gpus_reported}")
-                bt.logging.debug(f"{hotkey}: GPU Type: {gpu_name_reported}")
+                bt.logging.debug("%s: Number of GPUs: %d", hotkey, num_gpus_reported)
+                bt.logging.debug("%s: GPU Type: %s", hotkey, gpu_name_reported)
             if num_gpus_reported <= 0:
-                bt.logging.info(f"{hotkey}: No GPUs detected.")
+                bt.logging.info("%s: No GPUs detected.", hotkey)
                 raise ValueError("No GPUs detected.")
 
             # Step 5: Run the benchmarking mode
-            bt.logging.info(f"💻 {hotkey}: Executing benchmarking mode.")
-            bt.logging.debug(f"{hotkey}: [Step 5] Executing benchmarking mode on the miner...")
+            bt.logging.info("💻 %s: Executing benchmarking mode.", hotkey)
+            bt.logging.debug("%s: [Step 5] Executing benchmarking mode on the miner...", hotkey)
             execution_output = execute_script_on_miner(ssh_client, mode='benchmark')
-            bt.logging.debug(f"{hotkey}: [Step 5] Benchmarking completed.")
+            bt.logging.debug("%s: [Step 5] Benchmarking completed.", hotkey)
             # Parse the execution output
             num_gpus, vram, size_fp16, time_fp16, size_fp32, time_fp32 = parse_benchmark_output(execution_output)
-            bt.logging.debug(f"{hotkey}: [Benchmark Results] Detected {num_gpus} GPU(s) with {vram} GB unfractured VRAM.")
-            bt.logging.trace(f"{hotkey}: FP16 - Matrix Size: {size_fp16}, Execution Time: {time_fp16} s")
-            bt.logging.trace(f"{hotkey}: FP32 - Matrix Size: {size_fp32}, Execution Time: {time_fp32} s")
+            bt.logging.debug(
+                "%s: [Benchmark Results] Detected %d GPU(s) with %.2f GB unfractured VRAM.",
+                hotkey, num_gpus, vram)
+            bt.logging.trace("%s: FP16 - Matrix Size: %d, Execution Time: %.2f s", hotkey, size_fp16, time_fp16)
+            bt.logging.trace("%s: FP32 - Matrix Size: %d, Execution Time: %.2f s", hotkey, size_fp32, time_fp32)
             # Calculate performance metrics
             fp16_tflops = (2 * size_fp16 ** 3) / time_fp16 / 1e12
             fp32_tflops = (2 * size_fp32 ** 3) / time_fp32 / 1e12
-            bt.logging.debug(f"{hotkey}: [Performance Metrics] Calculated TFLOPS:")
-            bt.logging.debug(f"{hotkey}: FP16: {fp16_tflops:.2f} TFLOPS")
-            bt.logging.debug(f"{hotkey}: FP32: {fp32_tflops:.2f} TFLOPS")
+            bt.logging.debug("%s: [Performance Metrics] Calculated TFLOPS:", hotkey)
+            bt.logging.debug("%s: FP16: %.2f TFLOPS", hotkey, fp16_tflops)
+            bt.logging.debug("%s: FP32: %.2f TFLOPS", hotkey, fp32_tflops)
             gpu_name = identify_gpu(fp16_tflops, fp32_tflops, vram, gpu_data, gpu_name_reported, gpu_tolerance_pairs)
-            bt.logging.debug(f"{hotkey}: [GPU Identification] Based on performance: {gpu_name}")
+            bt.logging.debug("%s: [GPU Identification] Based on performance: %s", hotkey, gpu_name)
 
             # Step 6: Run the Merkle proof mode
-            bt.logging.debug(f"{hotkey}: [Step 6] Initiating Merkle Proof Mode.")
+            bt.logging.debug("%s: [Step 6] Initiating Merkle Proof Mode.", hotkey)
             # Step 1: Send seeds and execute compute mode
             n = adjust_matrix_size(vram, element_size=4, buffer_factor=0.10)
             seeds = get_random_seeds(num_gpus)
             send_seeds(ssh_client, seeds, n)
-            bt.logging.debug(f"{hotkey}: [Step 6] Compute mode executed on miner - Matrix Size: {n}")
+            bt.logging.debug("%s: [Step 6] Compute mode executed on miner - Matrix Size: %d", hotkey, n)
             start_time = time.time()
             execution_output = execute_script_on_miner(ssh_client, mode='compute')
             end_time = time.time()
             elapsed_time = end_time - start_time
-            bt.logging.debug(f"{hotkey}: Compute mode execution time: {elapsed_time:.2f} seconds.")
+            bt.logging.debug("%s: Compute mode execution time: %.2f seconds.", hotkey, elapsed_time)
             # Parse the execution output
             root_hashes_list, gpu_timings_list = parse_merkle_output(execution_output)
-            bt.logging.trace(f"{hotkey}: [Merkle Proof] Root hashes received from GPUs:")
+            bt.logging.trace("%s: [Merkle Proof] Root hashes received from GPUs:", hotkey)
             for gpu_id, root_hash in root_hashes_list:
-                bt.logging.trace(f"{hotkey}: GPU {gpu_id}: {root_hash}")
+                bt.logging.trace("%s: GPU %s: %s", hotkey, gpu_id, root_hash)
 
             # Calculate total times
             total_multiplication_time = 0.0
@@ -989,8 +976,10 @@ class Validator:
                 total_merkle_tree_time += timing.get('merkle_tree_time', 0.0)
             average_multiplication_time = total_multiplication_time / num_gpus if num_gpus > 0 else 0.0
             average_merkle_tree_time = total_merkle_tree_time / num_gpus if num_gpus > 0 else 0.0
-            bt.logging.debug(f"{hotkey}: Average Matrix Multiplication Time: {average_multiplication_time:.4f} seconds")
-            bt.logging.debug(f"{hotkey}: Average Merkle Tree Time: {average_merkle_tree_time:.4f} seconds")
+            bt.logging.debug(
+                "%s: Average Matrix Multiplication Time: %.4f seconds", hotkey, average_multiplication_time)
+            bt.logging.debug(
+                "%s: Average Merkle Tree Time: %.4f seconds", hotkey, average_merkle_tree_time)
 
             timing_passed = False
             if elapsed_time < time_tol + num_gpus * time_fp32 and average_multiplication_time < time_fp32:
@@ -1006,75 +995,79 @@ class Validator:
                 indices[gpu_id] = [(np.random.randint(0, n), np.random.randint(0, n)) for _ in range(num_indices)]
             send_challenge_indices(ssh_client, indices)
             execution_output = execute_script_on_miner(ssh_client, mode='proof')
-            bt.logging.debug(f"{hotkey}: [Merkle Proof] Proof mode executed on miner.")
+            bt.logging.debug("%s: [Merkle Proof] Proof mode executed on miner.", hotkey)
             responses = receive_responses(ssh_client, num_gpus)
-            bt.logging.debug(f"{hotkey}: [Merkle Proof] Responses received from miner.")
+            bt.logging.debug("%s: [Merkle Proof] Responses received from miner.", hotkey)
 
             verification_passed = verify_responses(seeds, root_hashes, responses, indices, n)
             if verification_passed and timing_passed:
-                bt.logging.info(f"✅ {hotkey}: GPU Identification: Detected {num_gpus} x {gpu_name} GPU(s)")
-
-                # Publish successful POG result
-                validation_duration = time.time() - start_time
-                await self.pubsub_client.publish_pog_result_event(
-                    miner_hotkey=hotkey,
-                    request_id=request_id,
-                    result="success",
-                    validation_duration=validation_duration,
-                    score=None,  # Add scoring logic if available
-                    benchmark_data={
-                        "gpu_utilization": 0.0,  # Add actual metrics if available
-                        "memory_usage": 0.0,
-                        "compute_performance": 0.0,
-                        "network_latency": 0.0
-                    }
-                )
+                bt.logging.info(
+                    "✅ %s: GPU Identification: Detected %d x %s GPU(s)",
+                    hotkey, num_gpus, gpu_name)
 
                 # Step 8: Perform health check on the same miner after POG is successful
-                bt.logging.info(f"🏥 {hotkey}: POG completed successfully, starting health check...")
-                bt.logging.trace(f"{hotkey}: [Step 8] Initiating health check...")
+                bt.logging.info("🏥 %s: POG completed successfully, starting health check...", hotkey)
+                bt.logging.trace("%s: [Step 8] Initiating health check...", hotkey)
                 try:
                     health_check_result = perform_health_check(axon, miner_info)
                     if health_check_result:
-                        bt.logging.success(f"✅ {hotkey}: Health check passed")
-                        bt.logging.trace(f"{hotkey}: [Step 8] Health check completed successfully - miner is accessible")
+                        bt.logging.success("✅ %s: Health check passed", hotkey)
+                        bt.logging.trace(
+                            "%s: [Step 8] Health check completed successfully - miner is accessible", hotkey)
+                        await self._publish_pog_result_event(
+                            hotkey=hotkey,
+                            request_id=request_id,
+                            start_time=start_time,
+                            result="success",
+                            health_check_result=health_check_result
+                        )
                         return (hotkey, gpu_name, num_gpus)
                     else:
-                        bt.logging.warning(f"⚠️ {hotkey}: Health check failed")
-                        bt.logging.trace(f"{hotkey}: [Step 8] Health check failed - miner is not accessible")
-                        bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check failure")
+                        bt.logging.warning("⚠️ %s: Health check failed", hotkey)
+                        bt.logging.trace(
+                            "%s: [Step 8] Health check failed - miner is not accessible", hotkey)
+                        bt.logging.info("⚠️ %s: GPU Identification: Aborted due to health check failure", hotkey)
+                        await self._publish_pog_result_event(
+                            hotkey=hotkey,
+                            request_id=request_id,
+                            start_time=start_time,
+                            result='failure',
+                            error_details='Health check failed',
+                        )
                         return (hotkey, None, -1)  # Use -1 to indicate health check failure
                 except Exception as e:
-                    bt.logging.error(f"❌ {hotkey}: Error during health check: {e}")
-                    bt.logging.trace(f"{hotkey}: [Step 8] Health check error: {e}")
-                    bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check error")
+                    bt.logging.error("❌ %s: Error during health check: %s", hotkey, e)
+                    bt.logging.trace("%s: [Step 8] Health check error: %s", hotkey, e)
+                    bt.logging.info("⚠️ %s: GPU Identification: Aborted due to health check error", hotkey)
+                    await self._publish_pog_result_event(
+                        hotkey=hotkey,
+                        request_id=request_id,
+                        start_time=start_time,
+                        result='error',
+                        error_details=f'Health check failed: {str(e)}',
+                    )
                     return (hotkey, None, -1)  # Use -1 to indicate health check failure
             else:
-                bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
-
-                # Publish failed POG result
-                validation_duration = time.time() - start_time
-                await self.pubsub_client.publish_pog_result_event(
-                    miner_hotkey=hotkey,
+                bt.logging.info(
+                    "⚠️  %s: GPU Identification: Aborted due to verification failure (verification=%s, timing=%s)",
+                    hotkey, verification_passed, timing_passed)
+                await self._publish_pog_result_event(
+                    hotkey=hotkey,
                     request_id=request_id,
-                    result="failure",
-                    validation_duration=validation_duration,
-                    error_details="Verification or timing failed"
+                    start_time=start_time,
+                    result='failure',
+                    error_details='Verification or timing failed',
                 )
-
                 return (hotkey, None, 0)
 
         except Exception as e:
-            bt.logging.info(f"❌ {hotkey}: Error testing Miner: {e}", exc_info=True)
-
-            # Publish error POG result
-            validation_duration = time.time() - start_time
-            await self.pubsub_client.publish_pog_result_event(
-                miner_hotkey=hotkey,
+            bt.logging.info("❌ %s: Error testing Miner: %s", hotkey, e, exc_info=True)
+            await self._publish_pog_result_event(
+                hotkey=hotkey,
                 request_id=request_id,
-                result="error",
-                validation_duration=validation_duration,
-                error_details=str(e)
+                start_time=start_time,
+                result='error',
+                error_details=f'Testing miner failed: {str(e)}',
             )
             return (hotkey, None, 0)
 
@@ -1093,7 +1086,13 @@ class Validator:
         try:
 
             # Define device requirements (customize as needed)
-            device_requirement = {"cpu": {"count": 1}, "gpu": {}, "hard_disk": {"capacity": 1073741824}, "ram": {"capacity": 1073741824}, "testing": True}
+            device_requirement = {
+                "cpu": {"count": 1},
+                "gpu": {},
+                "hard_disk": {"capacity": 1073741824},
+                "ram": {"capacity": 1073741824},
+                "testing": True
+            }
             device_requirement["gpu"] = {"count": 1, "capacity": 0, "type": ""}
 
             docker_requirement = {
@@ -1120,7 +1119,7 @@ class Validator:
                         timeout=60,
                     )
                     if response and response.get("status") is True:
-                        bt.logging.debug(f"Successfully allocated miner {axon.hotkey}")
+                        bt.logging.debug("Successfully allocated miner %s", axon.hotkey)
                         decrypted_info_str = rsa.decrypt_data(
                             private_key.encode("utf-8"),
                             base64.b64decode(response["info"]),
@@ -1134,29 +1133,59 @@ class Validator:
                             'password': info['password'],
                             'fixed_external_user_port': info.get('fixed_external_user_port', 27015),
                         }
-
+                        self.pubsub_client.publish_miner_allocation(
+                            miner_hotkey=axon.hotkey,
+                            allocation_result=True,
+                        )
                         return miner_info
                     else:
                         if not response:
-                            bt.logging.warning(f"{axon.hotkey}: No response received for miner allocation.")
+                            bt.logging.warning("%s: No response received for miner allocation.", axon.hotkey)
                         else:
-                            bt.logging.warning(f"{axon.hotkey}: Miner allocation request failed.")
-                            bt.logging.debug(f"{axon.hotkey}: Miner allocation response: {response}")
-                        return None
+                            bt.logging.warning("%s: Miner allocation request failed.", axon.hotkey)
+                            bt.logging.debug("%s: Miner allocation response: %s", axon.hotkey, response)
+
+                        self.pubsub_client.publish_miner_allocation(
+                            miner_hotkey=axon.hotkey,
+                            allocation_result=False,
+                            allocation_error=(
+                                'No response received'
+                                if not response
+                                else 'Miner allocation request failed'
+                            )
+                        )
                 else:
                     if not check_allocation:
-                        bt.logging.info(f"{axon.hotkey}: No response received for miner pre-allocation.")
+                        bt.logging.info("%s: No response received for miner pre-allocation.", axon.hotkey)
                     else:
-                        bt.logging.info(f"{axon.hotkey}: Miner pre-allocation failed.")
-                        bt.logging.debug(f"{axon.hotkey}: Miner pre-allocation response: {check_allocation}")
-                    return None
+                        bt.logging.info("%s: Miner pre-allocation failed.", axon.hotkey)
+                        bt.logging.debug("%s: Miner pre-allocation response: %s", axon.hotkey, check_allocation)
 
-        except ConnectionRefusedError as e:
-            bt.logging.debug(f"{axon.hotkey}: Connection refused during miner allocation: {e}")
-            return None
+                    self.pubsub_client.publish_miner_allocation(
+                        miner_hotkey=axon.hotkey,
+                        allocation_result=False,
+                        allocation_error=(
+                            'No response receivedfor miner pre-allocation'
+                            if not response
+                            else 'Miner pre-allocation request failed'
+                        )
+                    )
+
+        except ConnectionRefusedError as cre:
+            bt.logging.debug("%s: Connection refused during miner allocation: %s", axon.hotkey, cre)
+            self.pubsub_client.publish_miner_allocation(
+                miner_hotkey=axon.hotkey,
+                allocation_result=False,
+                allocation_error='Connection refused during miner allocation'
+            )
         except Exception as e:
-            bt.logging.warning(f"{axon.hotkey}: Exception during miner allocation for: {e}")
-            return None
+            bt.logging.warning("%s: Exception during miner allocation for: %s", axon.hotkey, e)
+            self.pubsub_client.publish_miner_allocation(
+                miner_hotkey=axon.hotkey,
+                allocation_result=False,
+                allocation_error=f'Miner allocation failed: {str(e)}'
+            )
+        return None
 
     async def deallocate_miner(self, axon, public_key):
         """
@@ -1181,8 +1210,10 @@ class Validator:
                     info = json.loads(row[0])  # Parse JSON string from the 'details' column
                     public_key = info.get("regkey")
             except Exception as e:
-                bt.logging.warning(f"{axon.hotkey}: Missing public key: {e}", exc_info=True)
+                bt.logging.warning("%s: Missing public key: %s", axon.hotkey, e, exc_info=True)
 
+        miner_hotkey = axon.hotkey
+        deallocation_error = None
         try:
             retry_count = 0
             max_retries = 3
@@ -1204,32 +1235,44 @@ class Validator:
 
                         if deregister_response and deregister_response.get("status") is True:
                             allocation_status = False
-                            bt.logging.debug(f"Deallocated miner {axon.hotkey}")
+                            bt.logging.debug("Deallocated miner %s", axon.hotkey)
                         else:
                             retry_count += 1
                             bt.logging.info(
-                                f"{axon.hotkey}: Failed to deallocate miner. "
-                                f"(attempt {retry_count}/{max_retries})"
+                                "%s: Failed to deallocate miner. (attempt %d/%d)",
+                                axon.hotkey, retry_count, max_retries
                             )
                             if not deregister_response:
-                                bt.logging.warning(f"{axon.hotkey}: No response received for miner deallocation.")
+                                bt.logging.warning("%s: No response received for miner deallocation.", axon.hotkey)
                             else:
-                                bt.logging.warning(f"{axon.hotkey}: Miner deallocation failed.")
-                                bt.logging.debug(f"{axon.hotkey}: Miner deallocation response: {deregister_response}")
+                                bt.logging.warning("%s: Miner deallocation failed.", axon.hotkey)
+                                bt.logging.debug("%s: Miner deallocation response: %s",
+                                                 axon.hotkey, deregister_response)
                             if retry_count >= max_retries:
-                                bt.logging.warning(f"{axon.hotkey}: Max retries reached for deallocating miner.")
+                                bt.logging.warning("%s: Max retries reached for deallocating miner.", axon.hotkey)
+                                deallocation_error = "Max retries reached for deallocating miner"
                             await asyncio.sleep(5)
                 except Exception as e:
                     retry_count += 1
                     bt.logging.debug(
-                        f"{axon.hotkey}: Error while trying to deallocate miner. "
-                        f"(attempt {retry_count}/{max_retries}): {e}"
+                        "%s: Error while trying to deallocate miner. (attempt %d/%d): %s",
+                        axon.hotkey, retry_count, max_retries, e
                     )
+                    deallocation_error = f"Miner deallocation failed: {str(e)}"
                     if retry_count >= max_retries:
-                        bt.logging.warning(f"{axon.hotkey}: Max retries reached for deallocating miner.")
+                        bt.logging.warning("%s: Max retries reached for deallocating miner.", axon.hotkey)
+                        deallocation_error = "Max retries reached for deallocating miner"
                     await asyncio.sleep(5)
         except Exception as e:
-            bt.logging.warning(f"{axon.hotkey}: Unexpected error during deallocation: {e}")
+            bt.logging.warning("%s: Unexpected error during deallocation: %s", axon.hotkey, e)
+            deallocation_error = f"Miner deallocation failed: {str(e)}"
+
+        self.pubsub_client.publish_miner_deallocation(
+            miner_hotkey=miner_hotkey,
+            retry_count=retry_count,
+            deallocation_result=allocation_status is False,
+            deallocation_error=deallocation_error
+        )
 
     def get_burn_uid(self) -> int:
         """

@@ -52,8 +52,10 @@ __all__ = [
     "PublishError",
     # Message types (4 core messages)
     "BasePubSubMessage",
-    "PogResultMessage",              # ✅ Report Proof of GPU test results
-    "MinerDiscoveryMessage",         # 🔍 Announce new miners joining the network
+    "PogResultMessage",                 # Report Proof of GPU test results
+    # MinerDiscoveryMessage,            # Announce new miners joining the network
+    "MinerDeallocationMessage",         # Announce validator deallocated miner
+    "MinerAllocationMessage",           # Announce validator allocated miner
     "TOPICS",
     "MESSAGE_TYPES",
 ]

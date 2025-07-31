@@ -316,7 +316,6 @@ class ValidatorGatewayPubSubClient:
 
         except Exception as e:
             self.logger.error("Failed to publish miner discovery: %s", e)
-            raise
 
     async def publish_pog_result_event(
         self,
@@ -327,6 +326,7 @@ class ValidatorGatewayPubSubClient:
         score: float = None,
         benchmark_data: dict = None,
         error_details: str = None,
+        health_check_result: bool = None,
     ) -> str:
         """
         High-level method to publish PoG validation result with error handling.
@@ -352,7 +352,8 @@ class ValidatorGatewayPubSubClient:
                 validation_duration_seconds=validation_duration,
                 score=score,
                 benchmark_data=benchmark_data,
-                error_details=error_details
+                error_details=error_details,
+                health_check_result=health_check_result
             )
 
             # Publish to validation events topic
@@ -360,7 +361,71 @@ class ValidatorGatewayPubSubClient:
 
         except Exception as e:
             self.logger.error("Failed to publish PoG result: %s", e)
-            raise
+
+    async def publish_miner_allocation(
+        self,
+        miner_hotkey: str,
+        allocation_result: bool | None = None,
+        allocation_error: str | None = None,
+    ) -> str:
+        """
+        High-level method to publish Miner allocation result with error handling.
+
+        Args:
+            miner_hotkey: The validated miner's hotkey
+            allocation_result: Optional miner allocation result
+            allocation_error: Optional miner allocation error
+
+        Returns:
+            Message ID or queued ID
+        """
+        try:
+            # Create Miner allocation result message
+            message = self._message_factory.create_miner_allocation(
+                miner_hotkey=miner_hotkey,
+                allocation_result=allocation_result,
+                allocation_error=allocation_error,
+            )
+
+            # Publish to miner events topic
+            return await self.publish_to_miner_events(message)
+
+        except Exception as e:
+            self.logger.error("Failed to publish Miner allocation result: %s", e)
+
+    async def publish_miner_deallocation(
+        self,
+        miner_hotkey: str,
+        retry_count: int | None = None,
+        deallocation_result: bool | None = None,
+        deallocation_error: str | None = None,
+    ) -> str:
+        """
+        High-level method to publish Miner deallocation result with error handling.
+
+        Args:
+            miner_hotkey: The validated miner's hotkey
+            retry_count: Optional retry count
+            deallocation_result: Optional miner deallocation result
+            deallocation_error: Optional miner deallocation error
+
+        Returns:
+            Message ID or queued ID
+        """
+        try:
+            # Create Miner deallocation result message
+            message = self._message_factory.create_miner_deallocation(
+                miner_hotkey=miner_hotkey,
+                retry_count=retry_count,
+                deallocation_result=deallocation_result,
+                deallocation_error=deallocation_error,
+            )
+
+            # Publish to miner events topic
+            return await self.publish_to_miner_events(message)
+
+        except Exception as e:
+            self.logger.error("Failed to publish Miner deallocation result: %s", e)
 
     def set_message_callback(self, topic_name: str, callback: Callable):
         """
