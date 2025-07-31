@@ -8,8 +8,6 @@ Note: Due to dataclass inheritance issues in the current implementation,
 these tests focus on the basic functionality and API structure.
 """
 
-import pytest
-
 
 class TestPubSubBasicFunctionality:
     """Basic tests for PubSub functionality."""

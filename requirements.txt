@@ -83,10 +83,6 @@ decorator==5.2.1
     # via retry
 defusedxml==0.7.1
     # via ipwhois
-deprecated==1.2.18
-    # via
-    #   opentelemetry-api
-    #   opentelemetry-semantic-conventions
 dnspython==2.7.0
     # via ipwhois
 docker==7.0.0
@@ -119,11 +115,11 @@ gitpython==3.1.44
     # via
     #   bittensor-cli
     #   wandb
-google-api-core[grpc]==2.25.0rc1
+google-api-core[grpc]==2.25.1
     # via
     #   google-cloud-core
     #   google-cloud-pubsub
-google-auth==2.40.0
+google-auth==2.40.3
     # via
     #   NI-Compute (pyproject.toml)
     #   google-api-core
@@ -131,7 +127,7 @@ google-auth==2.40.0
     #   google-cloud-pubsub
 google-cloud-core==2.4.3
     # via NI-Compute (pyproject.toml)
-google-cloud-pubsub==2.29.0
+google-cloud-pubsub==2.31.1
     # via NI-Compute (pyproject.toml)
 googleapis-common-protos[grpc]==1.70.0
     # via
@@ -142,14 +138,14 @@ gputil==1.4.0
     # via NI-Compute (pyproject.toml)
 grpc-google-iam-v1==0.14.2
     # via google-cloud-pubsub
-grpcio==1.71.0
+grpcio==1.74.0
     # via
     #   google-api-core
     #   google-cloud-pubsub
     #   googleapis-common-protos
     #   grpc-google-iam-v1
     #   grpcio-status
-grpcio-status==1.71.0
+grpcio-status==1.71.2
     # via
     #   google-api-core
     #   google-cloud-pubsub
@@ -162,7 +158,7 @@ idna==3.10
     #   yarl
 igpu==0.1.2
     # via NI-Compute (pyproject.toml)
-importlib-metadata==8.6.1
+importlib-metadata==8.7.0
     # via opentelemetry-api
 iniconfig==2.0.0
     # via pytest
@@ -246,14 +242,14 @@ nvidia-nvjitlink-cu12==12.4.127
     #   torch
 nvidia-nvtx-cu12==12.4.127
     # via torch
-opentelemetry-api==1.33.1
+opentelemetry-api==1.36.0
     # via
     #   google-cloud-pubsub
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-sdk==1.33.1
+opentelemetry-sdk==1.36.0
     # via google-cloud-pubsub
-opentelemetry-semantic-conventions==0.54b1
+opentelemetry-semantic-conventions==0.57b0
     # via opentelemetry-sdk
 packaging==24.2
     # via
@@ -410,7 +406,9 @@ typing-extensions==4.12.2
     #   anyio
     #   eth-typing
     #   fastapi
+    #   opentelemetry-api
     #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
     #   pydantic
     #   pydantic-core
     #   torch
@@ -434,13 +432,11 @@ wheel==0.45.1
     #   async-substrate-interface
     #   bittensor
     #   bittensor-cli
-wrapt==1.17.2
-    # via deprecated
 xxhash==3.5.0
     # via async-substrate-interface
 yarl==1.18.3
     # via aiohttp
-zipp==3.22.0
+zipp==3.23.0
     # via importlib-metadata
 
 # The following packages are considered to be unsafe in a requirements file:

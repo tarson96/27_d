@@ -36,7 +36,14 @@ from .validator_gateway_client import ValidatorGatewayPubSubClient
 from .auth import ValidatorGatewayAuth
 from .message_factory import MessageFactory
 
-from .message_types import *
+from .message_types import (
+    BasePubSubMessage,
+    MinerAllocationMessage,
+    MinerDeallocationMessage,
+    PogResultMessage,
+    TOPICS,
+    MESSAGE_TYPES,
+)
 from .exceptions import PubSubError, MessageValidationError, PublishError
 
 __version__ = "1.0.0"
@@ -52,10 +59,9 @@ __all__ = [
     "PublishError",
     # Message types (4 core messages)
     "BasePubSubMessage",
-    "PogResultMessage",                 # Report Proof of GPU test results
-    # MinerDiscoveryMessage,            # Announce new miners joining the network
-    "MinerDeallocationMessage",         # Announce validator deallocated miner
     "MinerAllocationMessage",           # Announce validator allocated miner
+    "MinerDeallocationMessage",         # Announce validator deallocated miner
+    "PogResultMessage",                 # Report Proof of GPU test results
     "TOPICS",
     "MESSAGE_TYPES",
 ]

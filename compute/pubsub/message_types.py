@@ -19,11 +19,10 @@ class TOPICS:
 
 # Message type constants
 class MESSAGE_TYPES:
-    # Validator → Backend messages (4 core messages)
+    # Validator → Backend messages (3 core messages)
     POG_RESULT = "pog_result"
     MINER_ALLOCATION = "miner_allocation"
     MINER_DEALLOCATION = "miner_deallocation"
-    MINER_DISCOVERY = "miner_discovery"
 
 
 # Base message structure
@@ -49,60 +48,6 @@ class BasePubSubMessage:
         if self.correlation_id:
             result["correlation_id"] = self.correlation_id
         return result
-
-# Validator → Backend message types
-
-
-# @dataclass
-# class GpuSpecs:
-#     model: str
-#     vram_gb: int
-#     cpu_cores: int
-#     ram_gb: int
-
-
-# @dataclass
-# class NetworkInfo:
-#     ip_address: str | None = None
-#     port: int | None = None
-#     region: str | None = None
-
-
-# @dataclass
-# class MinerDiscoveryMessage(BasePubSubMessage):
-#     # Required fields first
-#     validator_hotkey: str = field(default_factory=str)
-#     miner_hotkey: str = field(default_factory=str)
-#     discovered_at: str = field(default_factory=str)
-#     gpu_specs: GpuSpecs = field(default_factory=GpuSpecs)
-#     network_info: NetworkInfo = field(default_factory=NetworkInfo)
-#     # Optional fields last
-#     registration_block: int | None = None
-#     initial_benchmark_score: float | None = None
-
-#     def __post_init__(self):
-#         self.message_type = MESSAGE_TYPES.MINER_DISCOVERY
-#         self.source = "validator"
-#         self.data = {
-#             "validator_hotkey": self.validator_hotkey,
-#             "miner_hotkey": self.miner_hotkey,
-#             "discovered_at": self.discovered_at,
-#             "gpu_specs": {
-#                 "model": self.gpu_specs.model,
-#                 "vram_gb": self.gpu_specs.vram_gb,
-#                 "cpu_cores": self.gpu_specs.cpu_cores,
-#                 "ram_gb": self.gpu_specs.ram_gb,
-#             },
-#             "network_info": {
-#                 "ip_address": self.network_info.ip_address,
-#                 "port": self.network_info.port,
-#                 "region": self.network_info.region,
-#             },
-#         }
-#         if self.registration_block is not None:
-#             self.data["registration_block"] = self.registration_block
-#         if self.initial_benchmark_score is not None:
-#             self.data["initial_benchmark_score"] = self.initial_benchmark_score
 
 
 @dataclass
@@ -199,7 +144,6 @@ class MinerAllocationMessage(BasePubSubMessage):
 
 # Union type for all validator messages (3 core messages)
 # PogResultMessage,                 # Report Proof of GPU test results
-# MinerDiscoveryMessage,            # Announce new miners joining the network
 # MinerDeallocationMessage,         # Announce validator deallocated miner
 # MinerAllocationMessage,           # Announce validator allocated miner
 ValidatorMessage = PogResultMessage | MinerDeallocationMessage | MinerAllocationMessage
