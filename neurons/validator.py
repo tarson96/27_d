@@ -32,7 +32,7 @@ import bittensor as bt
 import time
 import paramiko
 
-from compute.pubsub.message_types import TOPICS
+import cryptography
 import torch
 from torch._C._te import Tensor # type: ignore
 import RSAEncryption as rsa
@@ -81,6 +81,7 @@ from neurons.Validator.database.pog import (
     update_pog_stats,
     write_stats,
 )
+from neurons.Validator.health_check import perform_health_check
 
 class Validator:
     blocks_done: set = set()
@@ -811,6 +812,10 @@ class Validator:
                                     "num_gpus": result[2]
                                 }
                             update_pog_stats(self.db, hotkey, result[1], result[2])
+                        elif result[1] is None and result[2] == -1:
+                            # Health check failed - don't retry
+                            bt.logging.info(f"❌ {hotkey}: Health check failed, skipping retry")
+                            update_pog_stats(self.db, hotkey, None, None)
                         else:
                             raise RuntimeError("GPU test failed")
                     except asyncio.TimeoutError:
@@ -1025,7 +1030,25 @@ class Validator:
                     }
                 )
 
-                return (hotkey, gpu_name, num_gpus)
+                # Step 8: Perform health check on the same miner after POG is successful
+                bt.logging.info(f"🏥 {hotkey}: POG completed successfully, starting health check...")
+                bt.logging.trace(f"{hotkey}: [Step 8] Initiating health check...")
+                try:
+                    health_check_result = perform_health_check(axon, miner_info)
+                    if health_check_result:
+                        bt.logging.success(f"✅ {hotkey}: Health check passed")
+                        bt.logging.trace(f"{hotkey}: [Step 8] Health check completed successfully - miner is accessible")
+                        return (hotkey, gpu_name, num_gpus)
+                    else:
+                        bt.logging.warning(f"⚠️ {hotkey}: Health check failed")
+                        bt.logging.trace(f"{hotkey}: [Step 8] Health check failed - miner is not accessible")
+                        bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check failure")
+                        return (hotkey, None, -1)  # Use -1 to indicate health check failure
+                except Exception as e:
+                    bt.logging.error(f"❌ {hotkey}: Error during health check: {e}")
+                    bt.logging.trace(f"{hotkey}: [Step 8] Health check error: {e}")
+                    bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check error")
+                    return (hotkey, None, -1)  # Use -1 to indicate health check failure
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
 
@@ -1109,6 +1132,7 @@ class Validator:
                             'port': info['port'],
                             'username': info['username'],
                             'password': info['password'],
+                            'fixed_external_user_port': info.get('fixed_external_user_port', 27015),
                         }
 
                         return miner_info
