@@ -408,9 +408,9 @@ class ValidatorGatewayPubSubClient:
         """Default message callback that logs and acknowledges messages."""
         try:
             # Decode the message data
-            # data = json.loads(message.data.decode("utf-8"))
+            data = json.loads(message.data.decode("utf-8"))
 
-            # self.logger.info("Received Pub/Sub message: %s", data)
+            self.logger.info("Received Pub/Sub message: %s", data)
 
             # Acknowledge the message
             message.ack()
@@ -421,6 +421,16 @@ class ValidatorGatewayPubSubClient:
         except Exception as e:
             self.logger.error("Error processing message: %s", e)
             message.nack()
+
+    async def subscribe_to_topics(self):
+        """
+        Subscribe to all the pub sub topics.
+        """
+        # Ensure clients are initialized
+        if not self._ensure_clients_initialized():
+            return
+        for topic_name in self.queues:
+            await self.subscribe_to_messages_topic(topic_name=topic_name)
 
     async def subscribe_to_messages_topic(
         self,

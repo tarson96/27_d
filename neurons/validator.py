@@ -1481,6 +1481,7 @@ def main():
     """
     validator = Validator()
     asyncio.run(validator.start())
+    asyncio.run(validator.pubsub_client.subscribe_to_topics())
 
 
 if __name__ == "__main__":
