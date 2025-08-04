@@ -168,7 +168,15 @@ setup_virtual_environment() {
         return 0
     fi
 
-    # 3. Create new venv in project root
+    # 3. Ensure python3-venv is available before creating venv
+    if ! python3 -m ensurepip --version > /dev/null 2>&1; then
+        info "ensurepip not available. Installing python-venv..."
+        py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        run_apt_get update || abort "Failed to update package lists."
+        install_package python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
+    fi
+
+    # 4. Create new venv in project root
     if [ -w "${CS_PATH}" ]; then
         info "Creating venv in project: ${project_venv}"
         python3 -m venv "$project_venv" || abort "Failed to create project venv"
@@ -466,17 +474,6 @@ EOF
   # Setup virtual environment intelligently
   setup_virtual_environment
 
-  # Ensure python3-venv is available if needed
-  if [ -z "${VIRTUAL_ENV:-}" ]; then
-    if ! python3 -m ensurepip --version > /dev/null 2>&1; then
-      info "ensurepip not available. Installing python-venv..."
-      py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-      run_apt_get update || abort "Failed to update package lists."
-      install_package python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
-    fi
-    # Retry setup after installing venv
-    setup_virtual_environment
-  fi
 
   info "Updating system packages for SN27 dependencies..."
   run_apt_get update || abort "Failed to update package lists."
