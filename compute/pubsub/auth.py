@@ -1,8 +1,8 @@
 """
-Authentication providers for SN27 Validator Pub/Sub communication.
+Authentication providers for SN27 Pub/Sub communication.
 
 This module provides authentication classes for different credential sources,
-including the validator-token-gateway authentication flow.
+including the SN27 token authentication flow.
 """
 
 import logging
@@ -12,12 +12,12 @@ from google.oauth2.credentials import Credentials
 from .exceptions import AuthenticationError
 
 
-class ValidatorGatewayAuth:
+class SN27TokenAuth:
     """
-    Authentication provider for validator-token-gateway based credentials.
+    Authentication provider for SN27 token gateway based credentials.
 
     This class handles the full authentication flow for validators:
-    1. Authenticate with validator-token-gateway using signed message
+    1. Authenticate with SN27 token gateway using signed message
     2. Get pubsub impersonation token using JWT
     3. Create OAuth2 credentials for pubsub clients
     """
@@ -52,7 +52,7 @@ class ValidatorGatewayAuth:
         }
 
     def _authenticate_validator_gateway(self) -> str | None:
-        """Authenticate with validator-token-gateway to get JWT token."""
+        """Authenticate with SN27 token gateway to get JWT token."""
         try:
             # Message to sign
             message = f"Authenticate to Bittensor Subnet {self.config.netuid}"
@@ -69,18 +69,15 @@ class ValidatorGatewayAuth:
             response = requests.post(
                 f"{domain}/auth/token",
                 headers={"Authorization": auth_header},
-                timeout=30
+                timeout=30,
             )
             response.raise_for_status()
             jwt_token = response.json().get("access_token")
-            self.logger.info(
-                "Successfully authenticated with validator-token-gateway on %s network",
-                self.config.subtensor.network
-            )
+            self.logger.info(f"Successfully authenticated with SN27 token gateway on {self.config.subtensor.network} network")
             return jwt_token
         except Exception as e:
-            self.logger.error("Failed to authenticate with validator-token-gateway: %s", e)
-            raise AuthenticationError(f"Failed to authenticate with validator-token-gateway: {e}") from e
+            self.logger.error(f"Failed to authenticate with SN27 token gateway: {e}")
+            raise AuthenticationError(f"Failed to authenticate with SN27 token gateway: {e}") from e
 
     def _get_pubsub_token(self) -> str | None:
         """Get Google Cloud Pub/Sub impersonation token."""
@@ -95,17 +92,14 @@ class ValidatorGatewayAuth:
             response = requests.post(
                 f"{domain}/auth/pubsub-token",
                 headers={"Authorization": f"Bearer {self.jwt_token}"},
-                timeout=30
+                timeout=30,
             )
             response.raise_for_status()
             pubsub_token = response.json().get("access_token")
-            self.logger.info(
-                "Successfully obtained Pub/Sub impersonation token for %s network",
-                self.config.subtensor.network
-            )
+            self.logger.info(f"Successfully obtained Pub/Sub impersonation token for {self.config.subtensor.network} network")
             return pubsub_token
         except Exception as e:
-            self.logger.error("Failed to get Pub/Sub token: %s", e)
+            self.logger.error(f"Failed to get Pub/Sub token: {e}")
             raise AuthenticationError(f"Failed to get Pub/Sub token: {e}") from e
 
     def get_credentials(self, refresh: bool = False) -> Credentials:
@@ -143,5 +137,5 @@ class ValidatorGatewayAuth:
 
     def refresh_tokens(self) -> None:
         """Refresh authentication tokens."""
-        self.logger.info("Refreshing validator-token-gateway tokens")
+        self.logger.info("Refreshing SN27 token gateway tokens")
         self.get_credentials(refresh=True)

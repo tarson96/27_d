@@ -1,15 +1,15 @@
 """
-SN27 Validator Pub/Sub Library
+SN27 Pub/Sub Library
 
 A Python library for bittensor validators to communicate with the SN27 backend
 via GCP Pub/Sub API. This library provides type-safe message creation and
 publishing capabilities for validator-side operations.
 
 Usage:
-    # For validators using validator-token-gateway authentication:
-    from compute.pubsub import ValidatorGatewayPubSubClient, MessageFactory
+    # For validators using SN27 token gateway authentication:
+    from compute.pubsub import PubSubClient, MessageFactory
 
-    client = ValidatorGatewayPubSubClient(wallet=wallet, config=config)
+    client = PubSubClient(wallet=wallet, config=config)
     factory = MessageFactory(validator_hotkey=wallet.hotkey.ss58_address)
 
     # Publish new miner discovery
@@ -21,19 +21,10 @@ Usage:
 
     # Subscribe to messages
     await client.subscribe_to_messages_topic()
-
-    # For standard service account authentication:
-    from compute.pubsub import ValidatorPubSubClient, MessageFactory
-
-    client = ValidatorPubSubClient(
-        project_id="your-project-id",
-        credentials_path="path/to/credentials.json"
-    )
-    # ... same usage as above
 """
 
-from .validator_gateway_client import ValidatorGatewayPubSubClient
-from .auth import ValidatorGatewayAuth
+from .client import PubSubClient
+from .auth import SN27TokenAuth
 from .message_factory import MessageFactory
 
 from .message_types import (
@@ -50,8 +41,8 @@ __version__ = "1.0.0"
 __author__ = "SN27 Team"
 
 __all__ = [
-    "ValidatorGatewayPubSubClient",
-    "ValidatorGatewayAuth",
+    "PubSubClient",
+    "SN27TokenAuth",
     "MessageFactory",
 
     "PubSubError",

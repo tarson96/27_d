@@ -1,8 +1,8 @@
 """
-Validator Gateway Pub/Sub client for SN27 validator communication.
+SN27 Pub/Sub client for Pub/Sub related communication at SN27.
 
 This module provides a specialized client for validators using the
-validator-token-gateway authentication flow.
+SN27 token gateway authentication flow.
 """
 
 import asyncio
@@ -13,14 +13,15 @@ from typing import Callable
 from google.cloud import pubsub_v1
 from google.api_core import exceptions as gcp_exceptions
 
-from .auth import ValidatorGatewayAuth
-from .message_types import ValidatorMessage, TOPICS
+from .auth import SN27TokenAuth
+from .message_types import PubSubMessage, TOPICS
+from .message_factory import MessageFactory
 from .exceptions import AuthenticationError, ConfigurationError
 
 
-class ValidatorGatewayPubSubClient:
+class PubSubClient:
     """
-    Pub/Sub client for validators using validator-token-gateway authentication.
+    Pub/Sub client for validators using SN27 token gateway authentication.
 
     This client provides both publishing and subscription capabilities
     for validators communicating with the SN27 backend.
@@ -48,13 +49,16 @@ class ValidatorGatewayPubSubClient:
         self.auto_refresh_interval = auto_refresh_interval
         self.logger = logging.getLogger(__name__)
 
+        # Initialize authentication
+        if not wallet or not config:
+            raise ConfigurationError("wallet and config are required for token gateway authentication")
+
         # Initialize auth provider
-        self.auth = ValidatorGatewayAuth(wallet, config)
+        self.auth = SN27TokenAuth(wallet, config)
 
         # Initialize clients
         self.publisher: pubsub_v1.PublisherClient | None = None
         self.subscriber: pubsub_v1.SubscriberClient | None = None
-        self._topic_paths: dict = {}
 
         # Subscription management
         self.subscription_futures: dict = {}
@@ -72,14 +76,7 @@ class ValidatorGatewayPubSubClient:
         self._queue_workers: dict[str, asyncio.Task] = {}
         self._worker_shutdown = asyncio.Event()
 
-        # Pre-populate topic paths (these don't require authentication)
-        project_id = self.auth.get_project_id()
-        self._topic_paths = {
-            TOPICS.ALLOCATION_EVENTS: f"projects/{project_id}/topics/{TOPICS.ALLOCATION_EVENTS}",
-            TOPICS.MINER_EVENTS: f"projects/{project_id}/topics/{TOPICS.MINER_EVENTS}",
-            TOPICS.SYSTEM_EVENTS: f"projects/{project_id}/topics/{TOPICS.SYSTEM_EVENTS}",
-            TOPICS.VALIDATION_EVENTS: f"projects/{project_id}/topics/{TOPICS.VALIDATION_EVENTS}",
-        }
+        self.project_id = self.auth.get_project_id()
 
         # Initialize clients with retries
         try:
@@ -93,8 +90,8 @@ class ValidatorGatewayPubSubClient:
             # Keep topic paths - they don't require authentication
 
         # Initialize message factory for high-level methods
-        from .message_factory import MessageFactory
-        self._message_factory = MessageFactory(validator_hotkey=self.wallet.hotkey.ss58_address)
+        self._message_factory = MessageFactory(
+            source='validator', validator_hotkey=self.wallet.hotkey.ss58_address)
 
         # Start background queue workers
         self._start_queue_workers()
@@ -231,13 +228,13 @@ class ValidatorGatewayPubSubClient:
         if not self._ensure_clients_initialized():
             return False
 
-        if topic_name not in self._topic_paths:
+        if topic_name not in self.queues:
             self.logger.error("Topic %s not found in topic paths", topic_name)
             return False
-
+        topic_path = f"projects/{self.project_id}/topics/{topic_name}"
         for attempt in range(3):
             try:
-                future = self.publisher.publish(self._topic_paths[topic_name], message_data)
+                future = self.publisher.publish(topic_path, message_data)
                 future.result(timeout=self.timeout)
                 return True
 
@@ -260,7 +257,7 @@ class ValidatorGatewayPubSubClient:
 
         return False
 
-    async def _publish_message(self, topic_name: str, message: ValidatorMessage) -> str:
+    async def _publish_message(self, topic_name: str, message: PubSubMessage) -> str:
         """Queue a message for publishing."""
         if topic_name not in self.queues:
             raise ConfigurationError(f"Unknown topic: {topic_name}")
@@ -274,11 +271,11 @@ class ValidatorGatewayPubSubClient:
 
         return f"queued-{int(time.time() * 1000)}"
 
-    async def publish_to_miner_events(self, message: ValidatorMessage) -> str:
+    async def publish_to_miner_events(self, message: PubSubMessage) -> str:
         """Publish a message to the miner-events topic."""
         return await self._publish_message(TOPICS.MINER_EVENTS, message)
 
-    async def publish_to_validation_events(self, message: ValidatorMessage) -> str:
+    async def publish_to_validation_events(self, message: PubSubMessage) -> str:
         """Publish a message to the validation-events topic."""
         return await self._publish_message(TOPICS.VALIDATION_EVENTS, message)
 

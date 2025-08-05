@@ -124,7 +124,7 @@ class TestPubSubBasicFunctionality:
         # This test documents the expected usage pattern
 
         usage_steps = [
-            "1. Create ValidatorGatewayPubSubClient with wallet and config",
+            "1. Create PubSubClient with wallet and config",
             "2. Create MessageFactory with validator hotkey",
             "3. Create messages using factory.create_* methods",
             "4. Publish messages using client.publish_to_* methods",
