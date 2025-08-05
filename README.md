@@ -21,11 +21,11 @@ Welcome to the **Bittensor NI Compute Subnet** repository. This subnet powers a 
    - [System Requirements](#system-requirements)
    - [Installation Methods](#installation-methods)
    - [Install Docker](#install-docker)
-   - [Install Bittensor](#install-bittensor)
-   - [Create/Regenerate Keys](#create-or-regenerate-keys)
-   - [Clone and Install Compute Subnet](#clone-and-install-compute-subnet)
+   - [Prepare Project Repository](#prepare-project-repository)
    - [CUDA Toolkit and GPU Drivers](#cuda-toolkit-and-gpu-drivers)
    - [NVIDIA Docker Support](#nvidia-docker-support)
+   - [Install Python Dependencies (includes Bittensor)](#install-python-dependencies-includes-bittensor)
+   - [Create/Regenerate Keys](#create-or-regenerate-keys)
    - [WandB Setup](#wandb-setup)
    - [PM2 Setup](#pm2-setup)
 5. [Networking and Firewall](#networking-and-firewall)
@@ -61,7 +61,7 @@ Welcome to the **Bittensor NI Compute Subnet** repository. This subnet powers a 
   [Cloud Platform](https://app.neuralinternet.ai/)
 
 - **Subnet 27 (This Repo)**
-  [GitHub: neuralinternet/compute-subnet](https://github.com/neuralinternet/compute-subnet)
+  [GitHub: neuralinternet/SN27](https://github.com/neuralinternet/SN27)
 
 - **Bittensor**
   [Bittensor Documentation](https://docs.bittensor.com/)
@@ -145,80 +145,20 @@ A Docker environment is required for miner resource allocation:
    ```
    This should display a confirmation message with no errors.
 
-### Install Bittensor
-1. **Run the one-line installer**:
-   ```bash
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/opentensor/bittensor/master/scripts/install.sh)"
-   ```
-2. **Verify Installation**:
-   ```bash
-   btcli --help
-   ```
-   If you get a command-not-found error, add Bittensor to your PATH:
-   ```bash
-   echo 'export PATH=$PATH:$(python3 -m site --user-base)/bin' >> ~/.bashrc
-   source ~/.bashrc
-   ```
-which will give you an output similar to below:
-```
-usage: btcli <command> <command args>
-
-bittensor cli v6.9.4
-
-positional arguments:
-  {subnets,s,subnet,root,r,roots,wallet,w,wallets,stake,st,stakes,sudo,su,sudos,legacy,l,info,i}
-    subnets (s, subnet)
-                        Commands for managing and viewing subnetworks.
-    root (r, roots)     Commands for managing and viewing the root network.
-    wallet (w, wallets)
-                        Commands for managing and viewing wallets.
-    stake (st, stakes)  Commands for staking and removing stake from hotkey accounts.
-    sudo (su, sudos)    Commands for subnet management
-    legacy (l)          Miscellaneous commands.
-    info (i)            Instructions for enabling autocompletion for the CLI.
-
-options:
-  -h, --help            show this help message and exit
-  --print-completion {bash,zsh,tcsh}
-                        Print shell tab completion script
-```
-See Bittensor’s documentation for alternative installation instructions.
-[Bittensor Documentation](https://docs.bittensor.com/)
-
-### Create or Regenerate Keys
-1. **Create new coldkey** (stores funds):
-   ```bash
-   btcli w new_coldkey
-   ```
-2. **Create new hotkey** (used for daily operations e.g. mining/validating/registration):
-   ```bash
-   btcli w new_hotkey
-   ```
-3. **Regenerate existing keys** if needed (to import them on this machine):
-   ```bash
-   btcli w regen_coldkeypub #see below
-   btcli w regen_coldkey
-   btcli w regen_hotkey
-   ```
-
-> **Tip**: For security, you can generate your coldkey on a secure offline machine and only load the public portion onto your miner or validator servers.
-
-### Clone and Install Compute Subnet
+### Prepare Project Repository
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/neuralinternet/nicompute.git
-   cd nicompute
+   git clone https://github.com/neuralinternet/SN27.git
+   cd SN27
    ```
-2. **Install dependencies**:
+
+2. **Create and activate a virtual environment**:
    ```bash
-   python3 -m pip install -r requirements.txt
-   python3 -m pip install --no-deps -r requirements-compute.txt
-   python3 -m pip install -e .
+   python3 -m venv venv
+   source venv/bin/activate
    ```
-3. **In case you have missing requirements**:
-```
-sudo apt -y install ocl-icd-libopencl1 pocl-opencl-icd
-```
+
+> **Important**: We'll install the Python dependencies later, after setting up CUDA and NVIDIA Docker support, as some packages require GPU drivers to be installed first.
 
 ### CUDA Toolkit and GPU Drivers
 > **Tip**: If Nvidia toolkit and drivers are already installed on your machine, scroll down to step 5 to verify then move on to the docker CUDA support.
@@ -294,11 +234,82 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo apt install -y nvidia-docker2
 ```
 
+### Install Python Dependencies (includes Bittensor)
+Now that CUDA and NVIDIA Docker are set up, we can safely install the Python dependencies:
+
+1. **Navigate to the project directory and activate venv** (if not already active):
+   ```bash
+   cd SN27
+   source venv/bin/activate
+   ```
+
+2. **Install all dependencies** (this automatically installs the correct Bittensor version):
+   ```bash
+   pip install -r requirements.txt
+   pip install -e .
+   ```
+
+3. **Install additional system dependencies**:
+   ```bash
+   sudo apt -y install ocl-icd-libopencl1 pocl-opencl-icd
+   ```
+
+4. **Verify Bittensor Installation**:
+   ```bash
+   btcli --help
+   ```
+
+   This will give you an output similar to below:
+   ```
+   usage: btcli <command> <command args>
+
+   bittensor cli v6.9.4
+
+   positional arguments:
+     {subnets,s,subnet,root,r,roots,wallet,w,wallets,stake,st,stakes,sudo,su,sudos,legacy,l,info,i}
+       subnets (s, subnet)
+                           Commands for managing and viewing subnetworks.
+       root (r, roots)     Commands for managing and viewing the root network.
+       wallet (w, wallets)
+                           Commands for managing and viewing wallets.
+       stake (st, stakes)  Commands for staking and removing stake from hotkey accounts.
+       sudo (su, sudos)    Commands for subnet management
+       legacy (l)          Miscellaneous commands.
+       info (i)            Instructions for enabling autocompletion for the CLI.
+
+   options:
+     -h, --help            show this help message and exit
+     --print-completion {bash,zsh,tcsh}
+                           Print shell tab completion script
+   ```
+
+> **Note**: Bittensor is automatically installed with the correct version when you install the project requirements. The Bittensor repository is: https://github.com/opentensor/bittensor
+
+### Create or Regenerate Keys
+Now that Bittensor is installed, you can create your wallet keys:
+
+1. **Create new coldkey** (stores funds):
+   ```bash
+   btcli w new_coldkey
+   ```
+2. **Create new hotkey** (used for daily operations e.g. mining/validating/registration):
+   ```bash
+   btcli w new_hotkey
+   ```
+3. **Regenerate existing keys** if needed (to import them on this machine):
+   ```bash
+   btcli w regen_coldkeypub #see below
+   btcli w regen_coldkey
+   btcli w regen_hotkey
+   ```
+
+> **Tip**: For security, you can generate your coldkey on a secure offline machine and only load the public portion onto your miner or validator servers.
+
 ### WandB Setup
 1. **Create a free WandB account**: [wandb.ai](https://wandb.ai/)
 2. **Obtain an API Key** and place it into your `.env` file:
    ```bash
-   cd compute-subnet
+   cd SN27
    read -p "Enter WanDB API key: " wandb_api_key && sed -e s/"your_api_key"/"${wandb_api_key}"/ .env.example > .env
 3. **Monitor stats** at [WandB: neuralinternet/opencompute](https://wandb.ai/neuralinternet/opencompute)
 
@@ -495,7 +506,7 @@ Example output:
 Name: nicompute
 Version: 1.8.3
 Summary: nicompute-subnet27
-Home-page: https://github.com/neuralinternet/nicompute
+Home-page: https://github.com/neuralinternet/SN27
 License: MIT
 ```
 
@@ -503,7 +514,7 @@ License: MIT
 
 ## Reward Program for Contributions
 We encourage community involvement in improving **Compute Subnet**. A **bounty program** is in place to reward valuable contributions.
-See the **[Reward Program for Valuable Contributions](https://github.com/neuralinternet/compute-subnet/blob/main/CONTRIBUTING.md)** for details.
+See the **[Reward Program for Valuable Contributions](https://github.com/neuralinternet/SN27/blob/main/CONTRIBUTING.md)** for details.
 
 
 ---
