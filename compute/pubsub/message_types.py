@@ -97,6 +97,8 @@ class PogResultMessage(BasePubSubMessage):
         }
         if self.benchmark_data:
             self.data["benchmark_data"] = {
+                "reported_gpu_number": self.benchmark_data.reported_gpu_number,
+                "reported_gpu_name": self.benchmark_data.reported_gpu_name,
                 "vram": self.benchmark_data.vram,
                 "size_fp16": self.benchmark_data.size_fp16,
                 "time_fp16": self.benchmark_data.time_fp16,
@@ -104,6 +106,7 @@ class PogResultMessage(BasePubSubMessage):
                 "time_fp32": self.benchmark_data.time_fp32,
                 "fp16_tflops": self.benchmark_data.fp16_tflops,
                 "fp32_tflops": self.benchmark_data.fp32_tflops,
+                "identified_gpu_number": self.benchmark_data.identified_gpu_number,
                 "identified_gpu_name": self.benchmark_data.identified_gpu_name,
                 "average_multiplication_time": self.benchmark_data.average_multiplication_time,
                 "average_merkle_tree_time": self.benchmark_data.average_merkle_tree_time,
