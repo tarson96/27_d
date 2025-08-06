@@ -25,7 +25,12 @@ Usage:
 
 from .client import PubSubClient
 from .auth import SN27TokenAuth
-from .message_factory import MessageFactory
+from .message_factory import (
+    MessageFactory,
+    create_allocation_ended_message,
+    create_miner_offline_message,
+    create_miner_online_message,
+)
 
 from .message_types import (
     BasePubSubMessage,
@@ -41,6 +46,9 @@ __version__ = "1.0.0"
 __author__ = "SN27 Team"
 
 __all__ = [
+    "create_allocation_ended_message",
+    "create_miner_offline_message",
+    "create_miner_online_message",
     "PubSubClient",
     "SN27TokenAuth",
     "MessageFactory",
