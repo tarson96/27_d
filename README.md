@@ -310,7 +310,7 @@ Now that Bittensor is installed, you can create your wallet keys:
 2. **Obtain an API Key** and place it into your `.env` file:
    ```bash
    cd SN27
-   read -p "Enter WanDB API key: " wandb_api_key && sed -e s/"your_api_key"/"${wandb_api_key}"/ .env.example > .env
+   read -p "Enter WanDB API key: " wandb_api_key && sed -e s/"your_api_key"/"${wandb_api_key}"/ .env.miner > .env
 3. **Monitor stats** at [WandB: neuralinternet/opencompute](https://wandb.ai/neuralinternet/opencompute)
 
 ### PM2 Setup
@@ -424,6 +424,8 @@ Check Miner Score Wandb Step 3: Check Stats/Score
 
 ## Running a Validator
 Validators measure and score miner performance, adjusting on-chain weights accordingly.
+
+**Environment Setup for Validators**: Validators use `.env.validator` for additional configuration variables not needed by miners.
 
 **General Validator Command**:
 ```bash
