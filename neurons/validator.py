@@ -839,6 +839,7 @@ class Validator:
 
     async def _publish_pog_result_event(
         self, hotkey, request_id, start_time, result,
+        benchmark_data: dict | None = None,
         health_check_result: bool | None = None,
         error_details: str | None = None,
     ):
@@ -849,6 +850,7 @@ class Validator:
             request_id=request_id,
             result=result,
             validation_duration=validation_duration,
+            benchmark_data=benchmark_data,
             health_check_result=health_check_result,
             error_details=error_details
         )
@@ -1012,6 +1014,23 @@ class Validator:
                             request_id=request_id,
                             start_time=start_time,
                             result="success",
+                            benchmark_data={
+                                "reported_gpu_number": num_gpus_reported,
+                                "reported_gpu_name": gpu_name_reported,
+                                "vram": vram,
+                                "size_fp16": size_fp16,
+                                "time_fp16": time_fp16,
+                                "size_fp32": size_fp32,
+                                "time_fp32": time_fp32,
+                                "fp16_tflops": fp16_tflops,
+                                "fp32_tflops": fp32_tflops,
+                                "identified_gpu_number": num_gpus,
+                                "identified_gpu_name": gpu_name,
+                                "average_multiplication_time": average_multiplication_time,
+                                "average_merkle_tree_time": average_merkle_tree_time,
+                                "verification_passed": verification_passed,
+                                "timing_passed": timing_passed,
+                            },
                             health_check_result=health_check_result
                         )
                         return (hotkey, gpu_name, num_gpus)
@@ -1025,6 +1044,24 @@ class Validator:
                             start_time=start_time,
                             result='failure',
                             error_details='Health check failed',
+                            health_check_result=False,
+                            benchmark_data={
+                                "reported_gpu_number": num_gpus_reported,
+                                "reported_gpu_name": gpu_name_reported,
+                                "vram": vram,
+                                "size_fp16": size_fp16,
+                                "time_fp16": time_fp16,
+                                "size_fp32": size_fp32,
+                                "time_fp32": time_fp32,
+                                "fp16_tflops": fp16_tflops,
+                                "fp32_tflops": fp32_tflops,
+                                "identified_gpu_number": num_gpus,
+                                "identified_gpu_name": gpu_name,
+                                "average_multiplication_time": average_multiplication_time,
+                                "average_merkle_tree_time": average_merkle_tree_time,
+                                "verification_passed": verification_passed,
+                                "timing_passed": timing_passed,
+                            },
                         )
                         return (hotkey, None, -1)  # Use -1 to indicate health check failure
                 except Exception as e:
@@ -1037,6 +1074,24 @@ class Validator:
                         start_time=start_time,
                         result='error',
                         error_details=f'Health check failed: {str(e)}',
+                        benchmark_data={
+                            "reported_gpu_number": num_gpus_reported,
+                            "reported_gpu_name": gpu_name_reported,
+                            "vram": vram,
+                            "size_fp16": size_fp16,
+                            "time_fp16": time_fp16,
+                            "size_fp32": size_fp32,
+                            "time_fp32": time_fp32,
+                            "fp16_tflops": fp16_tflops,
+                            "fp32_tflops": fp32_tflops,
+                            "identified_gpu_number": num_gpus,
+                            "identified_gpu_name": gpu_name,
+                            "average_multiplication_time": average_multiplication_time,
+                            "average_merkle_tree_time": average_merkle_tree_time,
+                            "verification_passed": verification_passed,
+                            "timing_passed": timing_passed,
+                        },
+                        health_check_result=False,
                     )
                     return (hotkey, None, -1)  # Use -1 to indicate health check failure
             else:
@@ -1047,6 +1102,24 @@ class Validator:
                     start_time=start_time,
                     result='failure',
                     error_details='Verification or timing failed',
+                    benchmark_data={
+                        "reported_gpu_number": num_gpus_reported,
+                        "reported_gpu_name": gpu_name_reported,
+                        "vram": vram,
+                        "size_fp16": size_fp16,
+                        "time_fp16": time_fp16,
+                        "size_fp32": size_fp32,
+                        "time_fp32": time_fp32,
+                        "fp16_tflops": fp16_tflops,
+                        "fp32_tflops": fp32_tflops,
+                        "identified_gpu_number": num_gpus,
+                        "identified_gpu_name": gpu_name,
+                        "average_multiplication_time": average_multiplication_time,
+                        "average_merkle_tree_time": average_merkle_tree_time,
+                        "verification_passed": verification_passed,
+                        "timing_passed": timing_passed,
+                    },
+                    health_check_result=False,
                 )
                 return (hotkey, None, 0)
 

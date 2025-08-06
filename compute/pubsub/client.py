@@ -285,7 +285,6 @@ class PubSubClient:
         request_id: str,
         result: str,
         validation_duration: float,
-        score: float = None,
         benchmark_data: dict = None,
         error_details: str = None,
         health_check_result: bool = None,
@@ -298,7 +297,6 @@ class PubSubClient:
             request_id: The PoG request ID
             result: Validation result ("success", "failure", "timeout", "error")
             validation_duration: Duration of validation in seconds
-            score: Optional validation score
             benchmark_data: Optional benchmark data dict
             error_details: Optional error details if result was error/failure
 
@@ -312,7 +310,6 @@ class PubSubClient:
                 request_id=request_id,
                 result=result,
                 validation_duration_seconds=validation_duration,
-                score=score,
                 benchmark_data=benchmark_data,
                 error_details=error_details,
                 health_check_result=health_check_result

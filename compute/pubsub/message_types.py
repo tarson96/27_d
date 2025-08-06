@@ -56,10 +56,21 @@ class BasePubSubMessage:
 
 @dataclass
 class BenchmarkData:
-    gpu_utilization: float
-    memory_usage: float
-    compute_performance: float
-    network_latency: float
+    reported_gpu_number: int
+    reported_gpu_name: str
+    vram: float
+    size_fp16: int
+    time_fp16: float
+    size_fp32: int
+    time_fp32: float
+    fp16_tflops: float
+    fp32_tflops: float
+    identified_gpu_number: int
+    identified_gpu_name: str
+    average_multiplication_time: float
+    average_merkle_tree_time: float
+    verification_passed: bool | None = False
+    timing_passed: bool | None = False
 
 
 @dataclass
@@ -70,8 +81,7 @@ class PogResultMessage(BasePubSubMessage):
     request_id: str = field(default_factory=str)
     result: Literal["success", "failure", "timeout", "error"] = field(default="error")
     validation_duration_seconds: float = field(default_factory=float)
-    # Optional fields last
-    score: float | None = None
+    # Optional fields
     benchmark_data: BenchmarkData | None = None
     error_details: str | None = None
     health_check_result: bool | None = None
@@ -85,14 +95,20 @@ class PogResultMessage(BasePubSubMessage):
             "result": self.result,
             "validation_duration_seconds": self.validation_duration_seconds,
         }
-        if self.score is not None:
-            self.data["score"] = self.score
         if self.benchmark_data:
             self.data["benchmark_data"] = {
-                "gpu_utilization": self.benchmark_data.gpu_utilization,
-                "memory_usage": self.benchmark_data.memory_usage,
-                "compute_performance": self.benchmark_data.compute_performance,
-                "network_latency": self.benchmark_data.network_latency,
+                "vram": self.benchmark_data.vram,
+                "size_fp16": self.benchmark_data.size_fp16,
+                "time_fp16": self.benchmark_data.time_fp16,
+                "size_fp32": self.benchmark_data.size_fp32,
+                "time_fp32": self.benchmark_data.time_fp32,
+                "fp16_tflops": self.benchmark_data.fp16_tflops,
+                "fp32_tflops": self.benchmark_data.fp32_tflops,
+                "identified_gpu_name": self.benchmark_data.identified_gpu_name,
+                "average_multiplication_time": self.benchmark_data.average_multiplication_time,
+                "average_merkle_tree_time": self.benchmark_data.average_merkle_tree_time,
+                "verification_passed": self.benchmark_data.verification_passed,
+                "timing_passed": self.benchmark_data.timing_passed,
             }
         if self.error_details:
             self.data["error_details"] = self.error_details

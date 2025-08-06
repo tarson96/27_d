@@ -40,7 +40,6 @@ class MessageFactory:
         request_id: str,
         result: str,
         validation_duration_seconds: float,
-        score: float | None = None,
         benchmark_data: dict | None = None,
         error_details: str | None = None,
         health_check_result: bool | None = None,
@@ -53,7 +52,6 @@ class MessageFactory:
             request_id: The request ID from the original PoG request
             result: Result of validation ("success", "failure", "timeout", "error")
             validation_duration_seconds: How long the validation took
-            score: Optional validation score
             benchmark_data: Optional benchmark data dict
             error_details: Optional error details if result was error/failure
 
@@ -63,10 +61,21 @@ class MessageFactory:
         benchmark_obj = None
         if benchmark_data:
             benchmark_obj = BenchmarkData(
-                gpu_utilization=benchmark_data["gpu_utilization"],
-                memory_usage=benchmark_data["memory_usage"],
-                compute_performance=benchmark_data["compute_performance"],
-                network_latency=benchmark_data["network_latency"],
+                reported_gpu_number=benchmark_data["reported_gpu_number"],
+                reported_gpu_name=benchmark_data["reported_gpu_name"],
+                vram=benchmark_data["vram"],
+                size_fp16=benchmark_data["size_fp16"],
+                time_fp16=benchmark_data["time_fp16"],
+                size_fp32=benchmark_data["size_fp32"],
+                time_fp32=benchmark_data["time_fp32"],
+                fp16_tflops=benchmark_data["fp16_tflops"],
+                fp32_tflops=benchmark_data["fp32_tflops"],
+                identified_gpu_number=benchmark_data["identified_gpu_number"],
+                identified_gpu_name=benchmark_data["identified_gpu_name"],
+                average_multiplication_time=benchmark_data["average_multiplication_time"],
+                average_merkle_tree_time=benchmark_data["average_merkle_tree_time"],
+                verification_passed=benchmark_data["verification_passed"],
+                timing_passed=benchmark_data["timing_passed"],
             )
 
         return PogResultMessage(
@@ -75,7 +84,6 @@ class MessageFactory:
             request_id=request_id,
             result=result,
             validation_duration_seconds=validation_duration_seconds,
-            score=score,
             benchmark_data=benchmark_obj,
             error_details=error_details,
             message_type="",  # Will be set in __post_init__
