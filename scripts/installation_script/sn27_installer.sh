@@ -731,13 +731,13 @@ check_existing_wandb_key() {
 }
 
 inject_wandb_env() {
-  local env_example="${CS_PATH}/.env.example"
+  local env_miner="${CS_PATH}/.env.miner"
   local env_path="${CS_PATH}/.env"
   info "Configuring .env for SN27..."
 
-  if [[ ! -f "$env_path" && -f "$env_example" ]]; then
-    info "Copying .env.example to .env"
-    cp "$env_example" "$env_path" || abort "Failed to copy .env.example to .env"
+  if [[ ! -f "$env_path" && -f "$env_miner" ]]; then
+    info "Copying .env.miner to .env"
+    cp "$env_miner" "$env_path" || abort "Failed to copy .env.miner to .env"
   fi
 
   if [[ -n "$WANDB_API_KEY" ]]; then
