@@ -1227,11 +1227,7 @@ class Validator:
                     self.pubsub_client.publish_miner_allocation(
                         miner_hotkey=axon.hotkey,
                         allocation_result=False,
-                        allocation_error=(
-                            'No response receivedfor miner pre-allocation'
-                            if not response
-                            else 'Miner pre-allocation request failed'
-                        )
+                        allocation_error='No response receivedfor miner pre-allocation'
                     )
 
         except ConnectionRefusedError as cre:
