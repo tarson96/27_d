@@ -2,6 +2,10 @@
 set -u
 set -o history -o histexpand
 
+# Prevent needrestart from interrupting installations
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
 ##############################################################################
 #                  sn27_installer.sh
 ##############################################################################
@@ -64,7 +68,7 @@ run_apt_get() {
 
 # Function to run apt-get install with non-interactive configuration
 install_package() {
-  DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "$@"
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a sudo -E apt-get install -y "$@"
 }
 
 abort() {
@@ -394,6 +398,13 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
         echo "ERROR: Failed to clone SN27 repository."
         exit 1
       }
+      # Switch to specified branch if provided
+      if [ -n "${COMPUTE_SUBNET_BRANCH:-}" ] && [ "$COMPUTE_SUBNET_BRANCH" != "main" ]; then
+        echo "Switching to branch: $COMPUTE_SUBNET_BRANCH"
+        cd /home/ubuntu/SN27 && git checkout "$COMPUTE_SUBNET_BRANCH" || {
+          echo "WARNING: Failed to checkout branch $COMPUTE_SUBNET_BRANCH, staying on main"
+        }
+      fi
     fi
     cd /home/ubuntu/SN27 || {
       echo "ERROR: Failed to change directory to /home/ubuntu/SN27."
@@ -506,20 +517,27 @@ EOF
   info "Installing OpenCL libraries..."
   install_package ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
 
-  info "Installing Node.js, npm and PM2..."
-  run_apt_get update
+  # Check if Node.js and PM2 are already installed
+  if command -v node >/dev/null 2>&1 && command -v pm2 >/dev/null 2>&1; then
+    info "Node.js and PM2 are already installed. Skipping installation."
+    node -v
+    pm2 --version
+  else
+    info "Installing Node.js, npm and PM2..."
+    run_apt_get update
 
-  install_package curl
+    install_package curl
 
-  curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 
-  install_package nodejs || abort "Failed to install Node.js."
+    install_package nodejs || abort "Failed to install Node.js."
 
-  node -v
+    node -v
 
-  sudo npm install -g pm2 || abort "Failed to install PM2."
+    sudo npm install -g pm2 || abort "Failed to install PM2."
 
-  pm2 --version || echo "PM2 installation may have issues."
+    pm2 --version || echo "PM2 installation may have issues."
+  fi
 fi
 
 ##############################################################################
