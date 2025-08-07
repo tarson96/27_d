@@ -195,7 +195,7 @@ class ComputeWandb:
         else:
             bt.logging.warning(f"wandb init failed, logging stats not possible.")
 
-    def update_allocated_hotkeys(self, hotkey_list):
+    def _update_allocated_hotkeys(self, hotkey_list):
         """
         This function updates the allocated hotkeys on the validator side and syncs the allocation with the database.
         """
@@ -215,6 +215,12 @@ class ComputeWandb:
         # Write the updated stats back to the database
         write_stats(self.db, stats)
 
+        preview = {uid: {"hotkey": d["hotkey"],
+                     "allocated": d["allocated"],
+                     "gpu_specs": d["gpu_specs"]}
+               for uid, d in stats.items() if 160 <= uid <= 170}          # first 10 UIDs
+        bt.logging.debug(f"[DBG wandb-update] stats preview → {preview}")
+
         # Prepare the update dictionary for the configuration
         update_dict = {
             "allocated_hotkeys": hotkey_list,  # Update allocated hotkeys
@@ -228,6 +234,53 @@ class ComputeWandb:
         # Sign the run
         self.sign_run()
 
+    def update_allocated_hotkeys(self, hotkey_list, penalized_hotkeys):
+        """
+        This function updates the allocated hotkeys on the validator side and syncs the allocation with the database,
+        then flattens the gpu_specs into gpu_name/num_gpus before pushing to WandB.
+        """
+        self.api.flush()
+
+        # 1) pull current stats from local DB
+        stats = retrieve_stats(self.db)
+
+        # 2) update allocation flag
+        for uid, data in stats.items():
+            data["allocated"] = data.get("hotkey") in hotkey_list
+
+        # 3) persist back to DB
+        write_stats(self.db, stats)
+
+        # 4) flatten gpu_specs for WandB
+        flat_stats: dict[int, dict] = {}
+        for uid, data in stats.items():
+            specs = data.pop("gpu_specs", {}) or {}
+            flat_stats[uid] = {
+                "uid":               uid,
+                "hotkey":            data.get("hotkey"),
+                "gpu_name":          specs.get("gpu_name"),
+                "gpu_num":          specs.get("num_gpus"),
+                "score":             data.get("score"),
+                "allocated":         data.get("allocated"),
+                "own_score":         data.get("own_score"),
+                "reliability_score": data.get("reliability_score"),
+                "created_at":        data.get("created_at"),
+            }
+
+
+        # 6) send to WandB
+        update_dict = {
+            "allocated_hotkeys": hotkey_list,
+            "stats":             flat_stats,
+            "penalized_hotkeys_checklist": penalized_hotkeys
+        }
+        self.run.config.update(update_dict, allow_val_change=True)
+
+         # Log the allocated hotkeys for tracking
+        self.run.log({"allocated_hotkeys": self.run.config["allocated_hotkeys"]})
+
+        # Sign the run
+        self.sign_run()
 
     def update_penalized_hotkeys_checklist(self, hotkey_list):
         """
@@ -338,7 +391,7 @@ class ComputeWandb:
         Then picks one 'dominant' entry per UID and preserves all fields (e.g., allocated).
         """
 
-        # Query all validator runs
+        # ——— 1) fetch all validator runs that have stats ——————————————
         self.api.flush()
         validator_runs = self.api.runs(
             path=f"{PUBLIC_WANDB_ENTITY}/{PUBLIC_WANDB_NAME}",
@@ -350,104 +403,74 @@ class ComputeWandb:
                 ]
             }
         )
-
         if not validator_runs:
             bt.logging.info("No validator info found in the project opencompute.")
             return {}
 
-        # aggregator[uid] = list of dicts
-        aggregator = {}
+        aggregator: dict[str, list[dict]] = {}
 
         for run in validator_runs:
             try:
-                run_config = run.config
-                hotkey = run_config.get("hotkey")
-                stats_data = run_config.get("stats", {})
+                rc         = run.config
+                hotkey     = rc.get("hotkey")
+                stats_data = rc.get("stats", {})
 
-                valid_validator_hotkey = (hotkey in valid_validator_hotkeys)
-                # If flag == False, allow *all* runs for data retrieval
-                if not flag:
-                    valid_validator_hotkey = True
+                # — guard: if W&B returned stats as a JSON string, parse it —
+                if isinstance(stats_data, str):
+                    try:
+                        stats_data = json.loads(stats_data)
+                    except Exception as e:
+                        bt.logging.warning(f"Could not parse stats JSON for run {run.id}: {e}")
+                        continue
 
-                # Only accept data if run verified, we have stats, and hotkey is valid
-                if self.verify_run(run) and stats_data and valid_validator_hotkey:
-                    # Iterate over the stats in that run
-                    for uid, data in stats_data.items():
-                        # If you also want allocated == True, re-enable that check:
-                        # if data.get("own_score") is True and data.get("allocated") is True:
-                        if data.get("own_score") is True and data.get("score", 0) > 0 and data.get("allocated") is True:
-                            aggregator.setdefault(uid, []).append(data)
-                            # Pull out gpu_specs for logging
-                            gs = data.get("gpu_specs") or {}
-                            bt.logging.trace(
-                                f"Added stats for UID {uid} from validator hotkey {run.config['hotkey']} | "
-                                f"GPU specs: {gs.get('gpu_name', 'N/A')} x {gs.get('num_gpus', 0)}"
-                            )
+                is_valid_hk = (hotkey in valid_validator_hotkeys) or not flag
+                if not (self.verify_run(run) and isinstance(stats_data, dict) and is_valid_hk):
+                    continue
+
+                # — collect each UID entry if it meets own_score, score>0, allocated —
+                for uid_str, entry in stats_data.items():
+                    if entry.get("own_score") and entry.get("score", 0) > 0 and entry.get("allocated"):
+                        aggregator.setdefault(uid_str, []).append(entry)
+                        specs = entry.get("gpu_specs") or {}
+                        bt.logging.trace(
+                            f"Added stats for UID {uid_str} from {hotkey} | "
+                            f"GPU: {specs.get('gpu_name','N/A')} x {specs.get('gpu_num',0)}"
+                        )
 
             except Exception as e:
                 bt.logging.info(f"Run ID: {run.id}, Name: {run.name}, Error: {e}")
 
-        # Helper function: pick the single "dominant" dict from valid_entries
-        def pick_dominant_dict(valid_entries):
-            """
-            Groups by (gpu_name, num_gpus, score), finds the combo that appears most often.
-            In case of tie, picks the highest score. Returns the original dict.
-            """
-            combos = []
+        # ——— 2) helper to pick the “dominant” entry per UID ——————————————
+        def pick_dominant(valid_entries: list[dict]) -> dict:
+            combos = [
+                (d["gpu_specs"].get("gpu_name"), d["gpu_specs"].get("gpu_num"), d["score"])
+                for d in valid_entries
+            ]
+            counts = Counter(combos)
+            if not counts:
+                return max(valid_entries, key=lambda d: d["score"])
+            top_combo, _ = counts.most_common(1)[0]
+            # tie-break on highest score
+            top_ties = [c for c, ct in counts.items() if ct == counts[top_combo]]
+            if len(top_ties) > 1:
+                top_combo = max(top_ties, key=lambda t: t[2])
             for d in valid_entries:
-                specs = d.get("gpu_specs", {})
-                combo_key = (specs.get("gpu_name"), specs.get("num_gpus"), d.get("score", 0))
-                combos.append(combo_key)
-
-            c = Counter(combos)
-            if not c:
-                # Fallback if everything is zero or something else is wrong
-                return max(valid_entries, key=lambda x: x.get('score', 0))
-
-            # Find the top combo
-            top_combo, top_count = c.most_common(1)[0][0], c.most_common(1)[0][1]
-
-            # Check for ties and resolve
-            all_top_combos = [combo for combo, count in c.items() if count == top_count]
-            if len(all_top_combos) == 1:
-                chosen_combo = all_top_combos[0]
-            else:
-                # Tie: pick the one with the highest score
-                chosen_combo = max(all_top_combos, key=lambda x: x[2])  # Index 2 is the score
-
-            # Find the original dict in valid_entries matching the chosen combo
-            for d in valid_entries:
-                specs = d.get("gpu_specs", {})
-                triple = (specs.get("gpu_name"), specs.get("num_gpus"), d.get("score", 0))
-                if triple == chosen_combo:
-                    # Do not overwrite "allocated", keep it as is
-                    d["own_score"] = True  # Mark as chosen
+                if (d["gpu_specs"].get("gpu_name"),
+                    d["gpu_specs"].get("gpu_num"),
+                    d["score"]) == top_combo:
+                    d["own_score"] = True
                     return d
 
-        final_stats = {}
-
-        for uid, entries in aggregator.items():
-            # Filter out zero-score entries if you want
-            valid_entries = [d for d in entries if d.get('score', 0) != 0]
+        # ——— 3) pick one per UID, convert UID to int ——————————————
+        final: dict[int, dict] = {}
+        for uid_str, entries in aggregator.items():
+            valid_entries = [e for e in entries if e.get("score", 0) != 0]
             if not valid_entries:
                 continue
+            chosen = valid_entries[0] if len(valid_entries) == 1 else pick_dominant(valid_entries)
+            final[int(uid_str)] = chosen
 
-            # If there's exactly one valid entry, pick it
-            if len(valid_entries) == 1:
-                valid_entries[0]["own_score"] = True  # Mark as chosen
-                final_stats[uid] = valid_entries[0]
-            else:
-                # Otherwise pick a single "dominant" dict
-                chosen_dict = pick_dominant_dict(valid_entries)
-                final_stats[uid] = chosen_dict
-
-        # Convert string UIDs to int if needed
-        final_stats_int_keys = {}
-        for uid_str, data in final_stats.items():
-            uid_int = int(uid_str)
-            final_stats_int_keys[uid_int] = data
-
-        return final_stats_int_keys
+        return final
 
     def get_penalized_hotkeys(self, valid_validator_hotkeys, flag):
         """
@@ -630,7 +653,7 @@ class ComputeWandb:
     def get_penalized_hotkeys_checklist(self, valid_validator_hotkeys, flag):
         """ This function gets penalized hotkeys checklist from a specific hardcoded validator. """
         # Hardcoded run ID
-        run_id = "neuralinternet/opencompute/0djlnjjs"
+        run_id = "neuralinternet/opencompute/ckig4h3x"
         # Fetch the specific run by its ID
         self.api.flush()
         run = self.api.run(run_id)
