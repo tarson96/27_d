@@ -49,7 +49,7 @@ def update_pog_stats(db: ComputeDb, hotkey, gpu_name, num_gpus):
                     SELECT id FROM pog_stats
                     WHERE hotkey = ?
                     ORDER BY created_at DESC
-                    LIMIT 4
+                    LIMIT 2
                 )
                 AND hotkey = ?
                 """,

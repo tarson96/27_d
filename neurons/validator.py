@@ -37,6 +37,7 @@ import bittensor as bt
 import math
 import time
 import paramiko
+import requests
 
 import cryptography
 import torch
@@ -93,7 +94,7 @@ class Validator:
     loop: AbstractEventLoop
 
     @property
-    def wallet(self) -> bt.wallet:
+    def wallet(self) -> bt.wallet: # type: ignore
         return self._wallet
 
     @property
@@ -180,24 +181,31 @@ class Validator:
         # Load configuration from YAML
         config_file = "config.yaml"
         self.config_data = load_yaml_config(config_file)
+
+        # Bring everything else into memory on init, too
+        self.gpu_performance  = self.config_data.get("gpu_performance", {})
+        self.gpu_time_models  = self.config_data.get("gpu_time_models", {})
+        self.merkle_proof     = self.config_data.get("merkle_proof", {})
+
+        # ── server_settings ─────────────────────────────────────
+        srv = self.config_data.get("server_settings", {})
+        self.server_ip   = srv.get("server_ip",   "65.108.33.88")
+        self.server_port = srv.get("server_port", "8000")
+        self.server_url  = f"http://{self.server_ip}:{self.server_port}"
+
+        self._last_cfg_pull    = 0.0
+        self._cfg_pull_interval = srv.get("pull_interval",300)
+
+        # immediately apply the disk‐based subnet_config
+        self.refresh_config_from_server()
+        self.load_subnet_config()
+
         cpu_cores = os.cpu_count() or 1
         configured_max_workers = self.config_data["merkle_proof"].get("max_workers", 32)
         safe_max_workers = min((cpu_cores + 4)*4, configured_max_workers)
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=safe_max_workers)
         self.results = {}
         self.gpu_task = None  # Track the GPU task
-
-        # Load subnet config
-        self.load_subnet_config()
-
-        # Step 3: Set up initial scoring weights for validation
-        bt.logging.info("Building validation weights.")
-        self.uids: list = self.metagraph.uids.tolist()
-        self.last_uids: list = self.uids.copy()
-        self.init_scores()
-        self.sync_status()
-
-        self.last_updated_block = self.current_block - (self.current_block % 100)
 
         # Initialize allocated_hotkeys as an empty list
         self.allocated_hotkeys = []
@@ -207,6 +215,15 @@ class Validator:
 
         # Initialize penalized_hotkeys_checklist as an empty list
         self.penalized_hotkeys_checklist = []
+
+        # Step 3: Set up initial scoring weights for validation
+        bt.logging.info("Building validation weights.")
+        self.uids: list = self.metagraph.uids.tolist()
+        self.last_uids: list = self.uids.copy()
+        self.init_scores()
+        self.sync_status()
+
+        self.last_updated_block = self.current_block - (self.current_block % 100)
 
         # Init the thread.
         self.lock = threading.Lock()
@@ -276,6 +293,40 @@ class Validator:
         bt.logging.info(f"🔢 Initialized scores : {self.scores.tolist()}")
         self.sync_scores()
 
+    def refresh_config_from_server(self):
+        """
+        Every `_cfg_pull_interval` seconds, fetch the latest JSON config
+        from your Streamlit/FastAPI endpoint and re‐apply *all* blocks.
+        """
+        now = time.time()
+        if now - self._last_cfg_pull < self._cfg_pull_interval:
+            return
+        self._last_cfg_pull = now
+
+        try:
+            r = requests.get(f"{self.server_url}/config", timeout=5)
+            if r.status_code != 200:
+                bt.logging.warning(f"Could not fetch config: HTTP {r.status_code}")
+                return
+
+            new_cfg = r.json().get("config", {})
+            if not isinstance(new_cfg, dict):
+                bt.logging.warning("Remote config payload was not a dict")
+                return
+
+            # replace our in‐memory YAML dump
+            self.config_data.update(new_cfg)
+
+            # re‐load each section
+            self.load_subnet_config()
+            self.gpu_performance = new_cfg.get("gpu_performance", {})
+            self.gpu_time_models = new_cfg.get("gpu_time_models", {})
+            self.merkle_proof    = new_cfg.get("merkle_proof", {})
+
+            bt.logging.info("🔄 Loaded updated config from server.")
+        except Exception as e:
+            bt.logging.warning(f"Error refreshing config: {e}")
+
     def load_subnet_config(self):
         subnet_config = self.config_data.get("subnet_config", {})
 
@@ -284,15 +335,15 @@ class Validator:
         self.max_challenge_blocks = subnet_config.get("max_challenge_blocks", 10)
         self.rand_delay_blocks_max = subnet_config.get("rand_delay_blocks_max", 5)
         self.allow_fake_sybil_slot = subnet_config.get("allow_fake_sybil_slot", False)
+        self.sybil_eligible_hotkeys = set(
+            subnet_config.get("sybil_check_eligible_hotkeys") or []
+        )
 
         # Emission control
         self.total_miner_emission = float(subnet_config.get("total_miner_emission", 0.0))
         self.gpu_weights = subnet_config.get("gpu_weights", {})
 
         bt.logging.debug(f"🔧 Loaded subnet config:")
-        bt.logging.debug(f"  blocks_per_epoch = {self.blocks_per_epoch}")
-        bt.logging.debug(f"  max_challenge_blocks = {self.max_challenge_blocks}")
-        bt.logging.debug(f"  rand_delay_blocks_max = {self.rand_delay_blocks_max}")
         bt.logging.debug(f"  total_miner_emission = {self.total_miner_emission}")
 
     @staticmethod
@@ -329,13 +380,14 @@ class Validator:
 
         # Update wandb
         try:
-            self.wandb.update_allocated_hotkeys(hotkey_list)
+            self.wandb.update_allocated_hotkeys(hotkey_list, self.penalized_hotkeys)
         except Exception as e:
             bt.logging.info(f"Error updating wandb : {e}")
 
     def sync_scores(self):
         # Fetch scoring stats
         self.stats = retrieve_stats(self.db)
+        miner_details_all = get_miner_details(self.db)
 
         valid_validator_hotkeys = self.get_valid_validator_hotkeys()
 
@@ -344,7 +396,7 @@ class Validator:
         # Fetch allocated hotkeys and stats
         self.allocated_hotkeys = self.wandb.get_allocated_hotkeys(valid_validator_hotkeys, True)
         self.stats_allocated = self.wandb.get_stats_allocated(valid_validator_hotkeys, True)
-        self.penalized_hotkeys = self.wandb.get_penalized_hotkeys_checklist_bak(valid_validator_hotkeys, True)
+        penalized_hotkeys = self.wandb.get_penalized_hotkeys_checklist(valid_validator_hotkeys, True)
         self._queryable_uids = self.get_queryable()
 
         # Calculate score
@@ -404,10 +456,17 @@ class Validator:
                         gpu_specs = None
                         self.stats[uid]["own_score"] = True
 
-                if hotkey in self.penalized_hotkeys:
+                if (
+                    hotkey in penalized_hotkeys
+                    or not isinstance(miner_details_all.get(hotkey), dict)
+                    or not miner_details_all.get(hotkey)
+                ):
                     score = 0
+
                 self.stats[uid]["score"] = score*100
-                self.stats[uid]["gpu_specs"] = gpu_specs
+                # Only replace if we actually have new information
+                if gpu_specs is not None:
+                    self.stats[uid]["gpu_specs"] = gpu_specs
 
                 # Keep or override reliability_score if you want
                 if "reliability_score" not in self.stats[uid]:
@@ -1347,24 +1406,24 @@ class Validator:
     def my_sybil_slot(self, ep: int | None = None) -> tuple[int, int]:
         """
         Return (slot_start, slot_end) for the Sybil-PoG epoch.
-        If we’re not an on-chain validator we optionally simulate index 0.
-
-        • Logs validator set once per epoch (INFO)
-        • Logs our slot once per current epoch (TRACE)
+        If our hotkey isn’t in the on-chain validator set and allow_fake_sybil_slot=False,
+        Returns slot 0 otherwise.
         """
         ep    = ep if ep is not None else self.current_epoch()
         start = self.epoch_start_block(ep)
 
-        # ─── validator hotkeys & our own ───────────────────────────────────
-        vals  = sorted(self.get_valid_validator_hotkeys())
-        my_hk = str(self.wallet.hotkey)
+        # ─── grab validator set and our own hotkey ────────────────────────
+        vals = sorted(self.get_valid_validator_hotkeys())
+
+        hotkey_obj = self.wallet.hotkey
+        # Keypair itself vs actual ss58 string:
+        my_hk_obj = hotkey_obj
+        my_hk     = getattr(hotkey_obj, "ss58_address", None) or str(hotkey_obj)
 
         if not hasattr(self, "_logged_val_epochs"):
             self._logged_val_epochs: set[int] = set()
         if ep not in self._logged_val_epochs:
-            bt.logging.info(f"[Sybil-PoG] Validator set for epoch {ep} ({len(vals)} entries):")
-            for i, hk in enumerate(vals):
-                bt.logging.info(f"  idx {i:2}: {hk}")
+            bt.logging.trace(f"[Sybil-PoG] Validator set for epoch {ep} ({len(vals)} entries): {vals}")
             self._logged_val_epochs.add(ep)
 
         # ─── determine our slot index ─────────────────────────────────────
@@ -1372,33 +1431,30 @@ class Validator:
             slots = len(vals)
             idx   = vals.index(my_hk)
         else:
+            # not in set → fallback
             if self.allow_fake_sybil_slot:
-                if not getattr(self, "_sybil_warned_once", False):
-                    bt.logging.warning("[Sybil-PoG] Hotkey not in validator set – "
-                                    "pretending to be validator #0 for testing.")
-                    self._sybil_warned_once = True
-                slots = len(vals) + 1
-                idx   = 0
+                bt.logging.warning(f"[Sybil-PoG] Hotkey {my_hk} not in validator set; using fake slot#0 (allow_fake_sybil_slot=True).")
             else:
-                raise RuntimeError(
-                    "[Sybil-PoG] Hotkey not in validator set and "
-                    "`allow_fake_sybil_slot` is disabled – refusing to compute slot."
+                bt.logging.warning(
+                    f"[Sybil-PoG] Hotkey {my_hk} not in validator set "
+                    f"and allow_fake_sybil_slot=False → defaulting to slot#0 in ring size {len(vals)+1}."
                 )
+            slots = len(vals) + 1
+            idx   = 0
 
-        size        = self.blocks_per_epoch // slots
-        slot_start  = start + idx * size
-        slot_end    = start + (idx + 1) * size - 1
+        size       = self.blocks_per_epoch // slots
+        slot_start = start + idx * size
+        slot_end   = start + (idx + 1) * size - 1
 
+        # ─── trace the chosen slot once per epoch ──────────────────────────
         if not hasattr(self, "_logged_slot_epochs"):
             self._logged_slot_epochs: set[int] = set()
-        current_ep = self.current_epoch()
-        if ep == current_ep and ep not in self._logged_slot_epochs:
-            bt.logging.trace(
-                f"[Sybil-PoG] Epoch {ep}: my slot {idx}/{slots} → blocks {slot_start}–{slot_end}"
-            )
+        if ep not in self._logged_slot_epochs:
+            bt.logging.info(f"[Sybil-PoG] Epoch {ep}: slot {idx}/{slots} → blocks {slot_start}–{slot_end}")
             self._logged_slot_epochs.add(ep)
 
         return slot_start, slot_end
+
 
     def _run_sybil_benchmark(
         self, uid: int, axon: bt.AxonInfo
@@ -1415,15 +1471,18 @@ class Validator:
 
             # 1) allocation ---------------------------------------------------
             priv, pub = rsa.generate_key_pair()
-            fut        = asyncio.run_coroutine_threadsafe(
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: starting allocation")
+            fut = asyncio.run_coroutine_threadsafe(
                 self.allocate_miner(axon, priv, pub), self.loop
             )
-            miner_info = fut.result(timeout=45)
+            miner_info = fut.result()
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: miner_info after allocation = {repr(miner_info)}")
             if miner_info is None:
-                bt.logging.trace(f"[Sybil-PoG] {hotkey}: allocator busy / no slot")
+                bt.logging.trace(f"[Sybil-PoG] {hotkey}: allocator busy / no slot (miner_info is None after allocation SUCCESS)")
                 return uid, hotkey, False, None, 0
+
             allocation_ok = True
-            bt.logging.trace(f"[Sybil-PoG] {hotkey}: allocated")
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: allocated, about to start benchmark, allocation_ok={allocation_ok}")
 
             # 2) SSH connect --------------------------------------------------
             ssh = paramiko.SSHClient()
@@ -1614,29 +1673,70 @@ class Validator:
             # ─── 4 launch benchmarks in parallel threads ────────────────────
             loop = asyncio.get_running_loop()
 
+            num_miners = len(axons)
+            bt.logging.trace(f"[Sybil-PoG] Launching benchmarks for {num_miners} miners with max_workers={num_miners}")
+
             # dedicate a *fresh* pool large enough for *all* miners this round
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(axons)) as pool:
                 tasks = [
                     loop.run_in_executor(pool, self._run_sybil_benchmark, uid, ax)
                     for uid, ax in axons
                 ]
+                slot_size = slot_end - slot_start
+                available_blocks = max(0, slot_size - delay_blocks)
+                timeout_blocks = min(self.max_challenge_blocks, available_blocks)
+                timeout_seconds = max(60, timeout_blocks * 12)
 
-                done, pending = await asyncio.wait(
-                    tasks, timeout= self.max_challenge_blocks * 12
-                )
-                for p in pending:
-                    p.cancel()
+                bt.logging.trace(f"[Sybil-PoG] Timeout set to {timeout_seconds:.1f}s "
+                                f"(slot size: {slot_size}, delay: {delay_blocks}, "
+                                f"available (blocks): {available_blocks}, capped to (blocks): {timeout_blocks})")
+
+                try:
+                    done, pending = await asyncio.wait(tasks, timeout=timeout_seconds)
+                    bt.logging.info(f"[Sybil-PoG] Benchmarks done. {len(done)} completed, {len(pending)} pending")
+                except Exception as e:
+                    bt.logging.error(f"[Sybil-PoG] Exception during asyncio.wait: {e}")
+                    return
+
+            for fut in pending:
+                fut.cancel()
+                bt.logging.warning(f"[Sybil-PoG] Task {fut} timed out and was cancelled")
+
+            for fut in done:
+                try:
+                    result = fut.result()
+                    # Log result
+                except Exception as e:
+                    bt.logging.error(f"[Sybil-PoG] Task Exception: {e!r}")
 
             # ─── 5 post-process results ─────────────────────────────────────
             passed, failed = 0, 0
+
+            # 1) all on-chain hotkeys
+            onchain_hotkeys = {
+                self.metagraph.axons[uid].hotkey
+                for uid in self.uids
+            }
+
+            # 2) track who actually passed this round
+            passed_hotkeys = set()
             for fut in done:
                 uid, hotkey, ok, gname, gnum = fut.result()
                 if ok:
                     update_pog_stats(self.db, hotkey, gname, gnum)
                     passed += 1
+                    passed_hotkeys.add(hotkey)
                 else:
-                    purge_pog_stats(self.db, hotkey)
                     failed += 1
+
+            # 3) rebuild penalized_hotkeys from scratch:
+            #    everyone on-chain who didn’t pass this round
+            self.penalized_hotkeys = [
+                hk for hk in onchain_hotkeys
+                if hk not in passed_hotkeys
+            ]
+
+            bt.logging.trace(f"PoG post-process: {passed} passed, {failed} failed; penalized: {self.penalized_hotkeys}")
 
             bt.logging.success(
                 f"[Sybil-PoG] Completed – {passed} PASS, {failed} FAIL, "
@@ -1676,6 +1776,10 @@ class Validator:
             try:
                 self.sync_local()
                 epoch = self.current_epoch()
+                self.refresh_config_from_server()
+
+                hk_obj = self.wallet.hotkey
+                my_hk  = getattr(hk_obj, "ss58_address", None) or str(hk_obj)
 
                 if self.current_block not in self.blocks_done:
                     self.blocks_done.add(self.current_block)
@@ -1749,12 +1853,13 @@ class Validator:
                                     self.gpu_task.add_done_callback(self.on_gpu_task_done)
                                 last_pog_epoch = epoch
                         else:                                   # odd → PoG-Sybil
-                            slot_start, _ = self.my_sybil_slot(epoch)
-                            if (epoch != last_sybil_epoch and
-                                    self.current_block == slot_start):
-                                if self.gpu_task is None or self.gpu_task.done():
-                                    self.gpu_task = asyncio.create_task(self.proof_of_gpu_sybil())
-                                last_sybil_epoch = epoch
+                            if my_hk in self.sybil_eligible_hotkeys:
+                                slot_start, _ = self.my_sybil_slot(epoch)
+                                if (epoch != last_sybil_epoch and
+                                        self.current_block == slot_start):
+                                    if self.gpu_task is None or self.gpu_task.done():
+                                        self.gpu_task = asyncio.create_task(self.proof_of_gpu_sybil())
+                                    last_sybil_epoch = epoch
 
                     # Perform specs queries
                     if (self.current_block % block_next_hardware_info == 0 and self.validator_perform_hardware_query) or (
