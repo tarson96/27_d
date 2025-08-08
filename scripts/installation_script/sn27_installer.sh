@@ -495,18 +495,17 @@ EOF
   info "Upgrading pip in the virtual environment..."
   pip install --upgrade pip || abort "Failed to upgrade pip."
 
+  info "Installing SN27 dependencies and package..."
   if [ -f "requirements.txt" ]; then
-    info "Installing base dependencies from requirements.txt..."
-    pip install -r requirements.txt || abort "Failed to install requirements."
+    pip install -e . -r requirements.txt || abort "Failed to install SN27 with requirements."
+  else
+    pip install -e . || abort "Failed to install SN27 (editable)."
   fi
 
   if [ -f "requirements-compute.txt" ]; then
     info "Installing compute-specific dependencies (no-deps) from requirements-compute.txt..."
     pip install --no-deps -r requirements-compute.txt || abort "Failed to install requirements-compute."
   fi
-
-  info "Installing SN27 in editable mode..."
-  pip install -e . || abort "Failed to install SN27 (editable)."
 
   python -c "import torch" 2>/dev/null
   if [ $? -ne 0 ]; then

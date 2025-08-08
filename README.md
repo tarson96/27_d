@@ -245,8 +245,7 @@ Now that CUDA and NVIDIA Docker are set up, we can safely install the Python dep
 
 2. **Install all dependencies** (this automatically installs the correct Bittensor version):
    ```bash
-   pip install -r requirements.txt
-   pip install -e .
+   pip install -e . -r requirements.txt
    ```
 
 3. **Install additional system dependencies**:
