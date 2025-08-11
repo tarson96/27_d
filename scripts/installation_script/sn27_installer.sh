@@ -2,6 +2,10 @@
 set -u
 set -o history -o histexpand
 
+# Prevent needrestart from interrupting installations
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
 ##############################################################################
 #                  sn27_installer.sh
 ##############################################################################
@@ -64,7 +68,7 @@ run_apt_get() {
 
 # Function to run apt-get install with non-interactive configuration
 install_package() {
-  DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "$@"
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a sudo -E apt-get install -y "$@"
 }
 
 abort() {
@@ -394,6 +398,13 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
         echo "ERROR: Failed to clone SN27 repository."
         exit 1
       }
+      # Switch to specified branch if provided
+      if [ -n "${COMPUTE_SUBNET_BRANCH:-}" ] && [ "$COMPUTE_SUBNET_BRANCH" != "main" ]; then
+        echo "Switching to branch: $COMPUTE_SUBNET_BRANCH"
+        cd /home/ubuntu/SN27 && git checkout "$COMPUTE_SUBNET_BRANCH" || {
+          echo "WARNING: Failed to checkout branch $COMPUTE_SUBNET_BRANCH, staying on main"
+        }
+      fi
     fi
     cd /home/ubuntu/SN27 || {
       echo "ERROR: Failed to change directory to /home/ubuntu/SN27."
@@ -484,18 +495,17 @@ EOF
   info "Upgrading pip in the virtual environment..."
   pip install --upgrade pip || abort "Failed to upgrade pip."
 
+  info "Installing SN27 dependencies and package..."
   if [ -f "requirements.txt" ]; then
-    info "Installing base dependencies from requirements.txt..."
-    pip install -r requirements.txt || abort "Failed to install requirements."
+    pip install -e . -r requirements.txt || abort "Failed to install SN27 with requirements."
+  else
+    pip install -e . || abort "Failed to install SN27 (editable)."
   fi
 
   if [ -f "requirements-compute.txt" ]; then
     info "Installing compute-specific dependencies (no-deps) from requirements-compute.txt..."
     pip install --no-deps -r requirements-compute.txt || abort "Failed to install requirements-compute."
   fi
-
-  info "Installing SN27 in editable mode..."
-  pip install -e . || abort "Failed to install SN27 (editable)."
 
   python -c "import torch" 2>/dev/null
   if [ $? -ne 0 ]; then
@@ -506,20 +516,27 @@ EOF
   info "Installing OpenCL libraries..."
   install_package ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
 
-  info "Installing Node.js, npm and PM2..."
-  run_apt_get update
+  # Check if Node.js and PM2 are already installed
+  if command -v node >/dev/null 2>&1 && command -v pm2 >/dev/null 2>&1; then
+    info "Node.js and PM2 are already installed. Skipping installation."
+    node -v
+    pm2 --version
+  else
+    info "Installing Node.js, npm and PM2..."
+    run_apt_get update
 
-  install_package curl
+    install_package curl
 
-  curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 
-  install_package nodejs || abort "Failed to install Node.js."
+    install_package nodejs || abort "Failed to install Node.js."
 
-  node -v
+    node -v
 
-  sudo npm install -g pm2 || abort "Failed to install PM2."
+    sudo npm install -g pm2 || abort "Failed to install PM2."
 
-  pm2 --version || echo "PM2 installation may have issues."
+    pm2 --version || echo "PM2 installation may have issues."
+  fi
 fi
 
 ##############################################################################
@@ -731,13 +748,13 @@ check_existing_wandb_key() {
 }
 
 inject_wandb_env() {
-  local env_example="${CS_PATH}/.env.example"
+  local env_miner="${CS_PATH}/.env.miner"
   local env_path="${CS_PATH}/.env"
   info "Configuring .env for SN27..."
 
-  if [[ ! -f "$env_path" && -f "$env_example" ]]; then
-    info "Copying .env.example to .env"
-    cp "$env_example" "$env_path" || abort "Failed to copy .env.example to .env"
+  if [[ ! -f "$env_path" && -f "$env_miner" ]]; then
+    info "Copying .env.miner to .env"
+    cp "$env_miner" "$env_path" || abort "Failed to copy .env.miner to .env"
   fi
 
   if [[ -n "$WANDB_API_KEY" ]]; then
