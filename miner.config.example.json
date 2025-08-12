@@ -13,6 +13,9 @@
   "ssh": {
     "port": 4444
   },
+  "external": {
+    "fixed-port": 27015
+  },
   "logging": {
     "debug": false
   },
