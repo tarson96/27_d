@@ -16,7 +16,6 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-import ast
 import asyncio
 import base64
 import json
@@ -24,21 +23,17 @@ import os
 import random
 import threading
 import traceback
-import hashlib
+import uuid
 import numpy as np
-import yaml
-import multiprocessing
 from asyncio import AbstractEventLoop
 from typing import Dict, Tuple, List
 
 import bittensor as bt
-import math
 import time
 import paramiko
-import cryptography
+
 import torch
-from cryptography.fernet import Fernet
-from torch._C._te import Tensor # type: ignore
+from torch._C._te import Tensor  # type: ignore
 import RSAEncryption as rsa
 import concurrent.futures
 from collections import defaultdict
@@ -50,22 +45,43 @@ from compute import (
     __version_as_int__,
     validator_permit_stake,
     weights_rate_limit
-    )
+)
 from compute.axon import ComputeSubnetSubtensor
-from compute.protocol import Allocate, Challenge, Specs
+from compute.protocol import Allocate
+from compute.pubsub import PubSubClient
 from compute.utils.db import ComputeDb
-from compute.utils.math import percent, force_to_float_or_default
+from compute.utils.math import percent
 from compute.utils.parser import ComputeArgPaser
 from compute.utils.subtensor import is_registered, get_current_block, calculate_next_block_time
 from compute.utils.version import try_update, get_local_version, version2number, get_remote_version
 from compute.wandb.wandb import ComputeWandb
 from neurons.Validator.calculate_pow_score import calc_score_pog
-from neurons.Validator.database.allocate import update_miner_details, select_has_docker_miners_hotkey, get_miner_details
-from neurons.Validator.database.challenge import select_challenge_stats, update_challenge_details
+from neurons.Validator.database.allocate import update_miner_details, get_miner_details
 from neurons.Validator.database.miner import select_miners, purge_miner_entries, update_miners
-from neurons.Validator.pog import adjust_matrix_size, compute_script_hash, execute_script_on_miner, get_random_seeds, load_yaml_config, parse_merkle_output, receive_responses, send_challenge_indices, send_script_and_request_hash, parse_benchmark_output, identify_gpu, send_seeds, verify_merkle_proof_row, get_remote_gpu_info, verify_responses
-from neurons.Validator.database.pog import get_pog_specs, retrieve_stats, update_pog_stats, write_stats
+from neurons.Validator.pog import (
+    adjust_matrix_size,
+    compute_script_hash,
+    execute_script_on_miner,
+    get_random_seeds,
+    load_yaml_config,
+    parse_merkle_output,
+    receive_responses,
+    send_challenge_indices,
+    send_script_and_request_hash,
+    parse_benchmark_output,
+    identify_gpu,
+    send_seeds,
+    get_remote_gpu_info,
+    verify_responses,
+)
+from neurons.Validator.database.pog import (
+    get_pog_specs,
+    retrieve_stats,
+    update_pog_stats,
+    write_stats,
+)
 from neurons.Validator.health_check import perform_health_check
+
 
 class Validator:
     blocks_done: set = set()
@@ -166,6 +182,13 @@ class Validator:
         # The metagraph holds the state of the network, letting us know about other miners.
         self._metagraph = self.subtensor.metagraph(self.config.netuid)
         bt.logging.info(f"Metagraph: {self.metagraph}")
+
+        self.pubsub_client = PubSubClient(
+            wallet=self.wallet,
+            config=self.config,
+            timeout=30.0,
+            auto_refresh_interval=600  # 30 minutes
+        )
 
         # Initialize the local db
         self.db = ComputeDb()
@@ -562,7 +585,6 @@ class Validator:
                 tensors.append(True)
             else:
                 tensors.append(False)
-
         return tensors
 
     def get_valid_queryable(self):
@@ -815,6 +837,24 @@ class Validator:
             bt.logging.error(f"Proof-of-GPU task failed: {e}")
             self.gpu_task = None
 
+    async def _publish_pog_result_event(
+        self, hotkey, request_id, start_time, result,
+        benchmark_data: dict | None = None,
+        health_check_result: bool | None = None,
+        error_details: str | None = None,
+    ):
+        # Publish successful POG result
+        validation_duration = time.time() - start_time
+        await self.pubsub_client.publish_pog_result_event(
+            miner_hotkey=hotkey,
+            request_id=request_id,
+            result=result,
+            validation_duration=validation_duration,
+            benchmark_data=benchmark_data,
+            health_check_result=health_check_result,
+            error_details=error_details
+        )
+
     async def test_miner_gpu(self, axon, config_data):
         """
         Allocate, test, and deallocate a single miner.
@@ -825,6 +865,8 @@ class Validator:
         miner_info = None
         host = None  # Initialize host variable
         hotkey = axon.hotkey
+        request_id = str(uuid.uuid4())
+        start_time = time.time()
         bt.logging.debug(f"{hotkey}: Starting miner test.")
 
         try:
@@ -833,7 +875,7 @@ class Validator:
             gpu_tolerance_pairs = gpu_data.get("gpu_tolerance_pairs", {})
             # Extract Merkle Proof Settings
             merkle_proof = config_data["merkle_proof"]
-            time_tol = merkle_proof.get("time_tolerance",5)
+            time_tol = merkle_proof.get("time_tolerance", 5)
             # Extract miner_script path
             miner_script_path = merkle_proof["miner_script_path"]
 
@@ -853,7 +895,13 @@ class Validator:
             ssh_client = paramiko.SSHClient()
             ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             bt.logging.debug(f"{hotkey}: Connect to Miner via SSH.")
-            ssh_client.connect(host, port=miner_info.get('port', 22), username=miner_info['username'], password=miner_info['password'], timeout=10)
+            ssh_client.connect(
+                host,
+                port=miner_info.get('port', 22),
+                username=miner_info['username'],
+                password=miner_info['password'],
+                timeout=10,
+            )
             if not (ssh_client):
                 ssh_client.close()
                 bt.logging.info(f"{hotkey}: SSH connection failed.")
@@ -961,23 +1009,129 @@ class Validator:
                     if health_check_result:
                         bt.logging.success(f"✅ {hotkey}: Health check passed")
                         bt.logging.trace(f"{hotkey}: [Step 8] Health check completed successfully - miner is accessible")
+                        await self._publish_pog_result_event(
+                            hotkey=hotkey,
+                            request_id=request_id,
+                            start_time=start_time,
+                            result="success",
+                            benchmark_data={
+                                "reported_gpu_number": num_gpus_reported,
+                                "reported_gpu_name": gpu_name_reported,
+                                "vram": vram,
+                                "size_fp16": size_fp16,
+                                "time_fp16": time_fp16,
+                                "size_fp32": size_fp32,
+                                "time_fp32": time_fp32,
+                                "fp16_tflops": fp16_tflops,
+                                "fp32_tflops": fp32_tflops,
+                                "identified_gpu_number": num_gpus,
+                                "identified_gpu_name": gpu_name,
+                                "average_multiplication_time": average_multiplication_time,
+                                "average_merkle_tree_time": average_merkle_tree_time,
+                                "verification_passed": verification_passed,
+                                "timing_passed": timing_passed,
+                            },
+                            health_check_result=health_check_result
+                        )
                         return (hotkey, gpu_name, num_gpus)
                     else:
                         bt.logging.warning(f"⚠️ {hotkey}: Health check failed")
                         bt.logging.trace(f"{hotkey}: [Step 8] Health check failed - miner is not accessible")
                         bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check failure")
+                        await self._publish_pog_result_event(
+                            hotkey=hotkey,
+                            request_id=request_id,
+                            start_time=start_time,
+                            result='failure',
+                            error_details='Health check failed',
+                            health_check_result=False,
+                            benchmark_data={
+                                "reported_gpu_number": num_gpus_reported,
+                                "reported_gpu_name": gpu_name_reported,
+                                "vram": vram,
+                                "size_fp16": size_fp16,
+                                "time_fp16": time_fp16,
+                                "size_fp32": size_fp32,
+                                "time_fp32": time_fp32,
+                                "fp16_tflops": fp16_tflops,
+                                "fp32_tflops": fp32_tflops,
+                                "identified_gpu_number": num_gpus,
+                                "identified_gpu_name": gpu_name,
+                                "average_multiplication_time": average_multiplication_time,
+                                "average_merkle_tree_time": average_merkle_tree_time,
+                                "verification_passed": verification_passed,
+                                "timing_passed": timing_passed,
+                            },
+                        )
                         return (hotkey, None, -1)  # Use -1 to indicate health check failure
                 except Exception as e:
                     bt.logging.error(f"❌ {hotkey}: Error during health check: {e}")
                     bt.logging.trace(f"{hotkey}: [Step 8] Health check error: {e}")
                     bt.logging.info(f"⚠️ {hotkey}: GPU Identification: Aborted due to health check error")
+                    await self._publish_pog_result_event(
+                        hotkey=hotkey,
+                        request_id=request_id,
+                        start_time=start_time,
+                        result='error',
+                        error_details=f'Health check failed: {str(e)}',
+                        benchmark_data={
+                            "reported_gpu_number": num_gpus_reported,
+                            "reported_gpu_name": gpu_name_reported,
+                            "vram": vram,
+                            "size_fp16": size_fp16,
+                            "time_fp16": time_fp16,
+                            "size_fp32": size_fp32,
+                            "time_fp32": time_fp32,
+                            "fp16_tflops": fp16_tflops,
+                            "fp32_tflops": fp32_tflops,
+                            "identified_gpu_number": num_gpus,
+                            "identified_gpu_name": gpu_name,
+                            "average_multiplication_time": average_multiplication_time,
+                            "average_merkle_tree_time": average_merkle_tree_time,
+                            "verification_passed": verification_passed,
+                            "timing_passed": timing_passed,
+                        },
+                        health_check_result=False,
+                    )
                     return (hotkey, None, -1)  # Use -1 to indicate health check failure
             else:
                 bt.logging.info(f"⚠️  {hotkey}: GPU Identification: Aborted due to verification failure (verification={verification_passed}, timing={timing_passed})")
+                await self._publish_pog_result_event(
+                    hotkey=hotkey,
+                    request_id=request_id,
+                    start_time=start_time,
+                    result='failure',
+                    error_details='Verification or timing failed',
+                    benchmark_data={
+                        "reported_gpu_number": num_gpus_reported,
+                        "reported_gpu_name": gpu_name_reported,
+                        "vram": vram,
+                        "size_fp16": size_fp16,
+                        "time_fp16": time_fp16,
+                        "size_fp32": size_fp32,
+                        "time_fp32": time_fp32,
+                        "fp16_tflops": fp16_tflops,
+                        "fp32_tflops": fp32_tflops,
+                        "identified_gpu_number": num_gpus,
+                        "identified_gpu_name": gpu_name,
+                        "average_multiplication_time": average_multiplication_time,
+                        "average_merkle_tree_time": average_merkle_tree_time,
+                        "verification_passed": verification_passed,
+                        "timing_passed": timing_passed,
+                    },
+                    health_check_result=False,
+                )
                 return (hotkey, None, 0)
 
         except Exception as e:
             bt.logging.info(f"❌ {hotkey}: Error testing Miner: {e}", exc_info=True)
+            await self._publish_pog_result_event(
+                hotkey=hotkey,
+                request_id=request_id,
+                start_time=start_time,
+                result='error',
+                error_details=f'Testing miner failed: {str(e)}',
+            )
             return (hotkey, None, 0)
 
         finally:
@@ -995,12 +1149,19 @@ class Validator:
         try:
 
             # Define device requirements (customize as needed)
-            device_requirement = {"cpu": {"count": 1}, "gpu": {}, "hard_disk": {"capacity": 1073741824}, "ram": {"capacity": 1073741824}, "testing": True}
+            device_requirement = {
+                "cpu": {"count": 1},
+                "gpu": {},
+                "hard_disk": {"capacity": 1073741824},
+                "ram": {"capacity": 1073741824},
+                "testing": True
+            }
             device_requirement["gpu"] = {"count": 1, "capacity": 0, "type": ""}
 
             docker_requirement = {
                 "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
             }
+
             async with bt.dendrite(wallet=self.wallet) as dendrite:
                 # Simulate an allocation query with Allocate
                 check_allocation = await dendrite(
@@ -1035,6 +1196,10 @@ class Validator:
                             'password': info['password'],
                             'fixed_external_user_port': info.get('fixed_external_user_port', 27015),
                         }
+                        self.pubsub_client.publish_miner_allocation(
+                            miner_hotkey=axon.hotkey,
+                            allocation_result=True,
+                        )
                         return miner_info
                     else:
                         if not response:
@@ -1042,21 +1207,44 @@ class Validator:
                         else:
                             bt.logging.warning(f"{axon.hotkey}: Miner allocation request failed.")
                             bt.logging.debug(f"{axon.hotkey}: Miner allocation response: {response}")
-                        return None
+
+                        self.pubsub_client.publish_miner_allocation(
+                            miner_hotkey=axon.hotkey,
+                            allocation_result=False,
+                            allocation_error=(
+                                'No response received'
+                                if not response
+                                else 'Miner allocation request failed'
+                            )
+                        )
                 else:
                     if not check_allocation:
                         bt.logging.info(f"{axon.hotkey}: No response received for miner pre-allocation.")
                     else:
                         bt.logging.info(f"{axon.hotkey}: Miner pre-allocation failed.")
                         bt.logging.debug(f"{axon.hotkey}: Miner pre-allocation response: {check_allocation}")
-                    return None
 
-        except ConnectionRefusedError as e:
+                    self.pubsub_client.publish_miner_allocation(
+                        miner_hotkey=axon.hotkey,
+                        allocation_result=False,
+                        allocation_error='No response receivedfor miner pre-allocation'
+                    )
+
+        except ConnectionRefusedError as cre:
             bt.logging.debug(f"{axon.hotkey}: Connection refused during miner allocation: {e}")
-            return None
+            self.pubsub_client.publish_miner_allocation(
+                miner_hotkey=axon.hotkey,
+                allocation_result=False,
+                allocation_error='Connection refused during miner allocation'
+            )
         except Exception as e:
             bt.logging.warning(f"{axon.hotkey}: Exception during miner allocation for: {e}")
-            return None
+            self.pubsub_client.publish_miner_allocation(
+                miner_hotkey=axon.hotkey,
+                allocation_result=False,
+                allocation_error=f'Miner allocation failed: {str(e)}'
+            )
+        return None
 
     async def deallocate_miner(self, axon, public_key):
         """
@@ -1083,6 +1271,8 @@ class Validator:
             except Exception as e:
                 bt.logging.warning(f"{axon.hotkey}: Missing public key: {e}", exc_info=True)
 
+        miner_hotkey = axon.hotkey
+        deallocation_error = None
         try:
             retry_count = 0
             max_retries = 3
@@ -1118,6 +1308,7 @@ class Validator:
                                 bt.logging.debug(f"{axon.hotkey}: Miner deallocation response: {deregister_response}")
                             if retry_count >= max_retries:
                                 bt.logging.warning(f"{axon.hotkey}: Max retries reached for deallocating miner.")
+                                deallocation_error = "Max retries reached for deallocating miner"
                             await asyncio.sleep(5)
                 except Exception as e:
                     retry_count += 1
@@ -1125,11 +1316,21 @@ class Validator:
                         f"{axon.hotkey}: Error while trying to deallocate miner. "
                         f"(attempt {retry_count}/{max_retries}): {e}"
                     )
+                    deallocation_error = f"Miner deallocation failed: {str(e)}"
                     if retry_count >= max_retries:
                         bt.logging.warning(f"{axon.hotkey}: Max retries reached for deallocating miner.")
+                        deallocation_error = "Max retries reached for deallocating miner"
                     await asyncio.sleep(5)
         except Exception as e:
             bt.logging.warning(f"{axon.hotkey}: Unexpected error during deallocation: {e}")
+            deallocation_error = f"Miner deallocation failed: {str(e)}"
+
+        self.pubsub_client.publish_miner_deallocation(
+            miner_hotkey=miner_hotkey,
+            retry_count=retry_count,
+            deallocation_result=allocation_status is False,
+            deallocation_error=deallocation_error
+        )
 
     def get_burn_uid(self) -> int:
         """
@@ -1277,7 +1478,6 @@ class Validator:
                     if self.current_block % block_next_sync_status == 0 or block_next_sync_status < self.current_block:
                         block_next_sync_status = self.current_block + 25  # ~ every 5 minutes
                         self.sync_status()
-
                         # Log chain data to wandb
                         chain_data = {
                             "Block": self.current_block,
@@ -1297,6 +1497,11 @@ class Validator:
                         self.last_updated_block = self.current_block
                         self.blocks_done.clear()
                         self.blocks_done.add(self.current_block)
+
+                    # Refresh tokens periodically (every 30 minutes)
+                    if self.current_block % 600 == 0:  # Approximately every 30 minutes at 3s block time
+                        bt.logging.info("Refreshing SN27 token gateway tokens")
+                        self.pubsub_client.refresh_credentials()
 
                 bt.logging.info(
                     (
@@ -1334,6 +1539,7 @@ def main():
     """
     validator = Validator()
     asyncio.run(validator.start())
+    asyncio.run(validator.pubsub_client.subscribe_to_topics())
 
 
 if __name__ == "__main__":
