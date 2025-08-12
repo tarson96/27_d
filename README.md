@@ -325,18 +325,23 @@ pm2 ls
 ---
 
 ## Networking and Firewall
-Open necessary ports:
+
+Your miner requires **two essential ports** to be opened:
+
+- **Port 4444 (SSH)**: Used by validators to access your miner for PoG (Proof of GPU) validation. Validators verify GPU functionality, available resources, and hardware specs through this port. **Required for miners to appear in the network.**
+- **Port 8091 (Axon)**: Used for Bittensor validator-miner communication. **Critical for network functionality.**
 
 1. **Install and configure `ufw`**:
    ```bash
    sudo apt install ufw
-   sudo ufw allow 4444
-   sudo ufw allow 22/tcp
-   sudo ufw allow 8091/tcp #can be altered to a port of your choice. See below in README.md
+   sudo ufw allow 4444      # SSH port for PoG validation
+   sudo ufw allow 22/tcp    # Standard SSH
+   sudo ufw allow 8091/tcp  # Axon port - can be customized
    sudo ufw enable
    sudo ufw status
    ```
-> **Tip**: You can open any ports: `sudo ufw allow xxxx/tcp` and use them as your `axon.port` default e.g. `sudo ufw allow 8091/tcp` and this port would be specified in your pm2 miner proccess arguments as `--axon.port 8091`. If you are using a cloud server it is a good idea to check with your provider if ports are open by default. If you can create your own network rules make sure these inbound rules are applied to the server. Ask your provider for assitance with this netowrking step.
+
+> **Custom Ports**: You can use different ports by opening them with `sudo ufw allow XXXX/tcp` and specifying them in your miner configuration with `--axon.port XXXX` or `--ssh.port XXXX`. If using a cloud server, ensure these ports are also opened in your provider's firewall/security groups.
 
 3. **Add user to docker group** (if not already):
    ```bash
@@ -390,6 +395,23 @@ pm2 start ./neurons/miner.py --name <MINER_NAME> --interpreter python3 -- \
 - **`--ssh.port`**: A port opened with UFW as instructed [above](#networking-and-firewall) (e.g., 4444) used for allocating your miner via ssh.
 - **`--auto-update`**: Enables automatic updating of the miner. When enabled, the miner will internally perform the update process (e.g., running `git pull`, installing dependencies, and restarting via PM2) so that no manual action is required.
 
+### Configuration File Usage (Alternative to Long CLI Commands)
+
+Instead of using long PM2 commands with many flags, you can use a configuration file:
+
+#### Option 1: Command Line Flags (Current)
+```bash
+pm2 start ./neurons/miner.py --name MINER --interpreter python3 -- \
+  --netuid 27 --subtensor.network finney --wallet.name default --wallet.hotkey default \
+  --axon.port 8091 --ssh.port 4444 --logging.debug --auto_update yes
+```
+
+#### Option 2: Configuration File (Recommended)
+1. Copy the example config: `cp miner.config.example.json miner.config.json`
+2. Edit `miner.config.json` with your settings
+3. Run: `pm2 start ./neurons/miner.py --name MINER --interpreter python3 -- --config miner.config.json`
+
+**Benefits:** Cleaner commands, easier management, less error-prone.
 
 ### Miner Options
 - `--miner.whitelist.not.enough.stake`: Whitelist validators lacking sufficient stake (default: False).
