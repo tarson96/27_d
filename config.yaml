@@ -167,4 +167,3 @@ server_settings:
   server_ip:      "65.108.33.88"
   server_port:    "8000"
   pull_interval:  60
-
