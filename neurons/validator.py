@@ -27,10 +27,12 @@ import uuid
 import numpy as np
 from asyncio import AbstractEventLoop
 from typing import Dict, Tuple, List
+from pathlib import Path
 
 import bittensor as bt
 import time
 import paramiko
+import requests
 
 import torch
 from torch._C._te import Tensor  # type: ignore
@@ -58,30 +60,8 @@ from compute.wandb.wandb import ComputeWandb
 from neurons.Validator.calculate_pow_score import calc_score_pog
 from neurons.Validator.database.allocate import update_miner_details, get_miner_details
 from neurons.Validator.database.miner import select_miners, purge_miner_entries, update_miners
-from neurons.Validator.pog import (
-    adjust_matrix_size,
-    compute_script_hash,
-    execute_script_on_miner,
-    get_random_seeds,
-    load_yaml_config,
-    parse_merkle_output,
-    receive_responses,
-    send_challenge_indices,
-    send_script_and_request_hash,
-    parse_benchmark_output,
-    identify_gpu,
-    send_seeds,
-    get_remote_gpu_info,
-    verify_responses,
-)
-from neurons.Validator.database.pog import (
-    get_pog_specs,
-    retrieve_stats,
-    update_pog_stats,
-    write_stats,
-)
-from neurons.Validator.health_check import perform_health_check
-
+from neurons.Validator.pog import prng, adjust_matrix_size, compute_script_hash, execute_script_on_miner, get_random_seeds, load_yaml_config, parse_merkle_output, receive_responses, send_challenge_indices, send_script_and_request_hash, parse_benchmark_output, identify_gpu, send_seeds, verify_merkle_proof_row, get_remote_gpu_info, verify_responses, merkle_ok
+from neurons.Validator.database.pog import get_pog_specs, retrieve_stats, update_pog_stats, write_stats, purge_pog_stats
 
 class Validator:
     blocks_done: set = set()
@@ -107,7 +87,7 @@ class Validator:
     loop: AbstractEventLoop
 
     @property
-    def wallet(self) -> bt.wallet:
+    def wallet(self) -> bt.wallet: # type: ignore
         return self._wallet
 
     @property
@@ -201,21 +181,31 @@ class Validator:
         # Load configuration from YAML
         config_file = "config.yaml"
         self.config_data = load_yaml_config(config_file)
+
+        # Bring everything else into memory on init, too
+        self.gpu_performance  = self.config_data.get("gpu_performance", {})
+        self.gpu_time_models  = self.config_data.get("gpu_time_models", {})
+        self.merkle_proof     = self.config_data.get("merkle_proof", {})
+
+        # ── server_settings ─────────────────────────────────────
+        srv = self.config_data.get("server_settings", {})
+        self.server_ip   = srv.get("server_ip",   "65.108.33.88")
+        self.server_port = srv.get("server_port", "8000")
+        self.server_url  = f"http://{self.server_ip}:{self.server_port}"
+
+        self._last_cfg_pull    = 0.0
+        self._cfg_pull_interval = srv.get("pull_interval",300)
+
+        # immediately apply the disk‐based subnet_config
+        self.refresh_config_from_server()
+        self.load_subnet_config()
+
         cpu_cores = os.cpu_count() or 1
         configured_max_workers = self.config_data["merkle_proof"].get("max_workers", 32)
         safe_max_workers = min((cpu_cores + 4)*4, configured_max_workers)
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=safe_max_workers)
         self.results = {}
         self.gpu_task = None  # Track the GPU task
-
-        # Step 3: Set up initial scoring weights for validation
-        bt.logging.info("Building validation weights.")
-        self.uids: list = self.metagraph.uids.tolist()
-        self.last_uids: list = self.uids.copy()
-        self.init_scores()
-        self.sync_status()
-
-        self.last_updated_block = self.current_block - (self.current_block % 100)
 
         # Initialize allocated_hotkeys as an empty list
         self.allocated_hotkeys = []
@@ -225,6 +215,15 @@ class Validator:
 
         # Initialize penalized_hotkeys_checklist as an empty list
         self.penalized_hotkeys_checklist = []
+
+        # Step 3: Set up initial scoring weights for validation
+        bt.logging.info("Building validation weights.")
+        self.uids: list = self.metagraph.uids.tolist()
+        self.last_uids: list = self.uids.copy()
+        self.init_scores()
+        self.sync_status()
+
+        self.last_updated_block = self.current_block - (self.current_block % 100)
 
         # Init the thread.
         self.lock = threading.Lock()
@@ -294,6 +293,59 @@ class Validator:
         bt.logging.info(f"🔢 Initialized scores : {self.scores.tolist()}")
         self.sync_scores()
 
+    def refresh_config_from_server(self):
+        """
+        Every `_cfg_pull_interval` seconds, fetch the latest JSON config
+        from your Streamlit/FastAPI endpoint and re‐apply *all* blocks.
+        """
+        now = time.time()
+        if now - self._last_cfg_pull < self._cfg_pull_interval:
+            return
+        self._last_cfg_pull = now
+
+        try:
+            r = requests.get(f"{self.server_url}/config", timeout=5)
+            if r.status_code != 200:
+                bt.logging.warning(f"Could not fetch config: HTTP {r.status_code}")
+                return
+
+            new_cfg = r.json().get("config", {})
+            if not isinstance(new_cfg, dict):
+                bt.logging.warning("Remote config payload was not a dict")
+                return
+
+            # replace our in‐memory YAML dump
+            self.config_data.update(new_cfg)
+
+            # re‐load each section
+            self.load_subnet_config()
+            self.gpu_performance = new_cfg.get("gpu_performance", {})
+            self.gpu_time_models = new_cfg.get("gpu_time_models", {})
+            self.merkle_proof    = new_cfg.get("merkle_proof", {})
+
+            bt.logging.info("🔄 Loaded updated config from server.")
+        except Exception as e:
+            bt.logging.warning(f"Error refreshing config: {e}")
+
+    def load_subnet_config(self):
+        subnet_config = self.config_data.get("subnet_config", {})
+
+        # Scheduling constants
+        self.blocks_per_epoch = subnet_config.get("blocks_per_epoch", 120)
+        self.max_challenge_blocks = subnet_config.get("max_challenge_blocks", 10)
+        self.rand_delay_blocks_max = subnet_config.get("rand_delay_blocks_max", 5)
+        self.allow_fake_sybil_slot = subnet_config.get("allow_fake_sybil_slot", False)
+        self.sybil_eligible_hotkeys = set(
+            subnet_config.get("sybil_check_eligible_hotkeys") or []
+        )
+
+        # Emission control
+        self.total_miner_emission = float(subnet_config.get("total_miner_emission", 0.0))
+        self.gpu_weights = subnet_config.get("gpu_weights", {})
+
+        bt.logging.debug(f"🔧 Loaded subnet config:")
+        bt.logging.debug(f"  total_miner_emission = {self.total_miner_emission}")
+
     @staticmethod
     def pretty_print_dict_values(items: dict):
         for key, values in items.items():
@@ -328,13 +380,14 @@ class Validator:
 
         # Update wandb
         try:
-            self.wandb.update_allocated_hotkeys(hotkey_list)
+            self.wandb.update_allocated_hotkeys(hotkey_list, self.penalized_hotkeys)
         except Exception as e:
             bt.logging.info(f"Error updating wandb : {e}")
 
     def sync_scores(self):
         # Fetch scoring stats
         self.stats = retrieve_stats(self.db)
+        miner_details_all = get_miner_details(self.db)
 
         valid_validator_hotkeys = self.get_valid_validator_hotkeys()
 
@@ -343,7 +396,7 @@ class Validator:
         # Fetch allocated hotkeys and stats
         self.allocated_hotkeys = self.wandb.get_allocated_hotkeys(valid_validator_hotkeys, True)
         self.stats_allocated = self.wandb.get_stats_allocated(valid_validator_hotkeys, True)
-        self.penalized_hotkeys = self.wandb.get_penalized_hotkeys_checklist_bak(valid_validator_hotkeys, True)
+        penalized_hotkeys = self.wandb.get_penalized_hotkeys_checklist(valid_validator_hotkeys, True)
         self._queryable_uids = self.get_queryable()
 
         # Calculate score
@@ -403,10 +456,17 @@ class Validator:
                         gpu_specs = None
                         self.stats[uid]["own_score"] = True
 
-                if hotkey in self.penalized_hotkeys:
+                if (
+                    hotkey in penalized_hotkeys
+                    or not isinstance(miner_details_all.get(hotkey), dict)
+                    or not miner_details_all.get(hotkey)
+                ):
                     score = 0
+
                 self.stats[uid]["score"] = score*100
-                self.stats[uid]["gpu_specs"] = gpu_specs
+                # Only replace if we actually have new information
+                if gpu_specs is not None:
+                    self.stats[uid]["gpu_specs"] = gpu_specs
 
                 # Keep or override reliability_score if you want
                 if "reliability_score" not in self.stats[uid]:
@@ -857,30 +917,27 @@ class Validator:
 
     async def test_miner_gpu(self, axon, config_data):
         """
-        Allocate, test, and deallocate a single miner.
-
+        Allocate, test, and deallocate a single miner (Sybil-compatible).
         :return: Tuple of (miner_hotkey, gpu_name, num_gpus)
         """
         allocation_status = False
         miner_info = None
-        host = None  # Initialize host variable
+        host = None
         hotkey = axon.hotkey
         request_id = str(uuid.uuid4())
         start_time = time.time()
+        public_key = None
         bt.logging.debug(f"{hotkey}: Starting miner test.")
 
         try:
-            # Step 0: Init
             gpu_data = config_data["gpu_performance"]
             gpu_tolerance_pairs = gpu_data.get("gpu_tolerance_pairs", {})
-            # Extract Merkle Proof Settings
             merkle_proof = config_data["merkle_proof"]
             time_tol = merkle_proof.get("time_tolerance", 5)
             # Extract miner_script path
             miner_script_path = merkle_proof["miner_script_path"]
 
             # Step 1: Allocate Miner
-            # Generate RSA key pair
             private_key, public_key = rsa.generate_key_pair()
             allocation_response = await self.allocate_miner(axon, private_key, public_key)
             if not allocation_response:
@@ -913,6 +970,8 @@ class Validator:
             bt.logging.debug(f"{hotkey}: [Step 1] Local script hash computed successfully.")
             bt.logging.trace(f"{hotkey}: Local Hash: {local_hash}")
             remote_hash = send_script_and_request_hash(ssh_client, miner_script_path)
+            bt.logging.trace(f"{hotkey}: [Step 1] Remote script hash received.")
+            bt.logging.trace(f"{hotkey}: Remote Hash: {remote_hash}")
             if local_hash != remote_hash:
                 bt.logging.info(f"{hotkey}: [Integrity Check] FAILURE: Hash mismatch detected.")
                 raise ValueError(f"{hotkey}: Script integrity verification failed.")
@@ -935,7 +994,7 @@ class Validator:
             bt.logging.debug(f"{hotkey}: [Step 5] Executing benchmarking mode on the miner...")
             execution_output = execute_script_on_miner(ssh_client, mode='benchmark')
             bt.logging.debug(f"{hotkey}: [Step 5] Benchmarking completed.")
-            # Parse the execution output
+            # Parse the execution output (Sybil compatible)
             num_gpus, vram, size_fp16, time_fp16, size_fp32, time_fp32 = parse_benchmark_output(execution_output)
             bt.logging.debug(f"{hotkey}: [Benchmark Results] Detected {num_gpus} GPU(s) with {vram} GB unfractured VRAM.")
             bt.logging.trace(f"{hotkey}: FP16 - Matrix Size: {size_fp16}, Execution Time: {time_fp16} s")
@@ -952,7 +1011,7 @@ class Validator:
             # Step 6: Run the Merkle proof mode
             bt.logging.debug(f"{hotkey}: [Step 6] Initiating Merkle Proof Mode.")
             # Step 1: Send seeds and execute compute mode
-            n = adjust_matrix_size(vram, element_size=4, buffer_factor=0.10)
+            n = adjust_matrix_size(vram, element_size=4, buffer_factor=0.05)
             seeds = get_random_seeds(num_gpus)
             send_seeds(ssh_client, seeds, n)
             bt.logging.debug(f"{hotkey}: [Step 6] Compute mode executed on miner - Matrix Size: {n}")
@@ -961,7 +1020,7 @@ class Validator:
             end_time = time.time()
             elapsed_time = end_time - start_time
             bt.logging.debug(f"{hotkey}: Compute mode execution time: {elapsed_time:.2f} seconds.")
-            # Parse the execution output
+            # Parse the execution output (Sybil compatible)
             root_hashes_list, gpu_timings_list = parse_merkle_output(execution_output)
             bt.logging.trace(f"{hotkey}: [Merkle Proof] Root hashes received from GPUs:")
             for gpu_id, root_hash in root_hashes_list:
@@ -972,8 +1031,8 @@ class Validator:
             total_merkle_tree_time = 0.0
             num_gpus = len(gpu_timings_list)
             for _, timing in gpu_timings_list:
-                total_multiplication_time += timing.get('multiplication_time', 0.0)
-                total_merkle_tree_time += timing.get('merkle_tree_time', 0.0)
+                total_multiplication_time += timing.get('gemm', 0.0)
+                total_merkle_tree_time += timing.get('merkle', 0.0)
             average_multiplication_time = total_multiplication_time / num_gpus if num_gpus > 0 else 0.0
             average_merkle_tree_time = total_merkle_tree_time / num_gpus if num_gpus > 0 else 0.0
             bt.logging.debug(f"{hotkey}: Average Matrix Multiplication Time: {average_multiplication_time:.4f} seconds")
@@ -986,11 +1045,11 @@ class Validator:
             # Step 7: Verify merkle proof
             root_hashes = {gpu_id: root_hash for gpu_id, root_hash in root_hashes_list}
             gpu_timings = {gpu_id: timing for gpu_id, timing in gpu_timings_list}
-            n = gpu_timings[0]['n']  # Assuming same n for all GPUs
+            n = gpu_timings[0]['n'] if 0 in gpu_timings else n
             indices = {}
             num_indices = 1
             for gpu_id in range(num_gpus):
-                indices[gpu_id] = [(np.random.randint(0, n), np.random.randint(0, n)) for _ in range(num_indices)]
+                indices[gpu_id] = [(np.random.randint(0, 2 * n), np.random.randint(0, n)) for _ in range(num_indices)]
             send_challenge_indices(ssh_client, indices)
             execution_output = execute_script_on_miner(ssh_client, mode='proof')
             bt.logging.debug(f"{hotkey}: [Merkle Proof] Proof mode executed on miner.")
@@ -1135,18 +1194,41 @@ class Validator:
             return (hotkey, None, 0)
 
         finally:
-            if allocation_status and miner_info:
-                await self.deallocate_miner(axon, public_key)
+            try:
+                if ssh_client:
+                    ssh_client.close()
+            except Exception:
+                pass
+            try:
+                if allocation_status and miner_info:
+                    await self.deallocate_miner(axon, public_key)
+                    bt.logging.trace(f"{hotkey}: Miner de-allocated.")
+            except Exception as e:
+                bt.logging.info(f"{hotkey}: Miner de-allocation failed: {e}")
 
-    async def allocate_miner(self, axon, private_key, public_key):
+    async def allocate_miner(
+        self,
+        axon: bt.AxonInfo,
+        private_key: str,
+        public_key: str,
+    ) -> dict | None:
         """
-        Allocate a miner by querying the allocator.
+        Ask the allocator on ``axon`` for one container and return SSH creds.
 
-        :param uid: Unique identifier for the axon.
-        :param axon: Axon object containing miner details.
-        :return: Dictionary with miner details if successful, None otherwise.
+        • No preliminary “checking=True” probe – we directly request the slot.
+        • Retries up to 3× on transient disconnects (2 s → 4 s back-off).
+        • Returns *None* if the miner is busy or all retries fail.
         """
-        try:
+        device_requirement = {
+            "cpu":       {"count": 1},
+            "gpu":       {"count": 1, "capacity": 0, "type": ""},
+            "hard_disk": {"capacity": 1_073_741_824},   # 1 GiB
+            "ram":       {"capacity": 1_073_741_824},   # 1 GiB
+            "testing":   True,
+        }
+        docker_requirement = {
+            "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
+        }
 
             # Define device requirements (customize as needed)
             device_requirement = {
@@ -1173,21 +1255,22 @@ class Validator:
                     response = await dendrite(
                         axon,
                         Allocate(
-                            timeline=1,
+                            timeline=1,                    # one-shot job
                             device_requirement=device_requirement,
-                            checking=False,
+                            checking=False,               # real allocation
                             public_key=public_key,
                             docker_requirement=docker_requirement,
                         ),
                         timeout=60,
                     )
-                    if response and response.get("status") is True:
-                        bt.logging.debug(f"Successfully allocated miner {axon.hotkey}")
-                        decrypted_info_str = rsa.decrypt_data(
-                            private_key.encode("utf-8"),
-                            base64.b64decode(response["info"]),
+
+                    if rsp and rsp.get("status", False):
+                        # ---- decrypt allocator’s reply -----------------------
+                        dec  = rsa.decrypt_data(
+                            private_key.encode(),
+                            base64.b64decode(rsp["info"]),
                         )
-                        info = json.loads(decrypted_info_str)
+                        info = json.loads(dec)
 
                         miner_info = {
                             'host': axon.ip,
@@ -1382,6 +1465,136 @@ class Validator:
         else:
             bt.logging.error(f"❌ Failed to set burn weights: {result}")
 
+    def set_weight_capped_by_gpu(self):
+        """
+        Distribute emission weights to miners based on GPU type priorities (normalized),
+        capped by total_miner_emission. Remaining weight is burned.
+        """
+        try:
+            # Load config
+            subnet_config = self.config_data.get("subnet_config", {})
+            total_miner_emission = float(subnet_config.get("total_miner_emission", 0.0))
+            gpu_priorities = subnet_config.get("gpu_weights", {})
+
+            # Clamp emission
+            total_miner_emission = min(max(total_miner_emission, 0.0), 1.0)
+
+            # Prepare miner data
+            uid_to_gpu = {}
+            uid_to_score = {}
+            gpu_groups = {}
+
+            for uid in self.uids:
+                if uid not in self.stats:
+                    continue
+
+                stats_entry = self.stats[uid]
+                score = max(0.0, float(stats_entry.get("score", 0.0))) / 100.0
+
+                gpu_specs = stats_entry.get("gpu_specs", {})
+                if not isinstance(gpu_specs, dict):
+                    continue
+
+                gpu_name = gpu_specs.get("gpu_name", None)
+                if gpu_name is None or gpu_name not in gpu_priorities:
+                    continue
+
+                priority = gpu_priorities[gpu_name]
+                if priority <= 0:
+                    continue
+
+                uid_to_gpu[uid] = gpu_name
+                uid_to_score[uid] = score
+
+                if gpu_name not in gpu_groups:
+                    gpu_groups[gpu_name] = []
+                gpu_groups[gpu_name].append(uid)
+
+            # Normalize GPU priorities
+            total_priority = sum(v for v in gpu_priorities.values() if v > 0)
+            if total_priority == 0:
+                bt.logging.warning("⚠️ All GPU priorities are 0. Entire emission will be burned.")
+                total_assigned_weight = 0.0
+                uid_weights = torch.zeros(len(self.uids), dtype=torch.float32)
+            else:
+                uid_weights = torch.zeros(len(self.uids), dtype=torch.float32)
+                total_assigned_weight = 0.0
+                gpu_actual_emission = {}
+
+                for gpu_name, uids in gpu_groups.items():
+                    priority = gpu_priorities[gpu_name]
+                    group_cap = (priority / total_priority) * total_miner_emission
+
+                    scores = torch.tensor([uid_to_score[uid] for uid in uids], dtype=torch.float32)
+                    if scores.sum() == 0:
+                        continue  # no emission for this group
+
+                    normalized = scores / scores.sum()
+                    capped = normalized * group_cap
+
+                    for i, uid in enumerate(uids):
+                        idx = self.uids.index(uid)
+                        uid_weights[idx] = capped[i]
+
+                    gpu_actual_emission[gpu_name] = group_cap
+                    total_assigned_weight += group_cap
+
+            # Burn the rest
+            burn_uid    = self.get_burn_uid()
+            burn_weight = max(0.0, 1.0 - total_assigned_weight)
+
+            if burn_uid in self.uids:
+                # burn UID already among miners → overwrite its slot
+                uids    = self.uids                      # keep original order
+                weights = uid_weights.clone()            # same length
+                idx     = self.uids.index(burn_uid)
+                weights[idx] = burn_weight
+                bt.logging.debug("[Weights] burn_uid overwritten in-place")
+            else:
+                # burn UID not present → append it
+                uids    = self.uids + [burn_uid]
+                weights = torch.cat(
+                    [uid_weights, torch.tensor([burn_weight], dtype=torch.float32)]
+                )
+                bt.logging.debug("[Weights] burn_uid appended")
+
+            # final normalisation guard
+            weights = weights / weights.sum()
+
+            # Logging
+            # Debug breakdown per GPU
+            bt.logging.debug("📊 Emission breakdown per GPU group:")
+
+            # GPU group emissions
+            for gpu_name, cap in gpu_actual_emission.items():
+                percent = cap * 100.0
+                bt.logging.debug(f"   • {gpu_name:<25} {percent:6.2f}%")
+
+            # Burned portion
+            burn_percent = burn_weight * 100.0
+
+            # Totals
+            bt.logging.info(f"📈 Total miner emission:       {(total_assigned_weight * 100):6.2f}%")
+            bt.logging.info(f"🔥 Burned emission:            {burn_percent:6.2f}%")
+            bt.logging.info(f"⚙️ Final weights: {weights.tolist()}")
+
+            result = self.subtensor.set_weights(
+                netuid=self.config.netuid,
+                wallet=self.wallet,
+                uids=uids,
+                weights=weights,
+                version_key=__version_as_int__,
+                wait_for_inclusion=False,
+            )
+
+            if isinstance(result, tuple) and result[0]:
+                bt.logging.success("✅ Successfully set capped GPU-based weights.")
+            else:
+                bt.logging.error(f"❌ Failed to set GPU-capped weights: {result}")
+
+        except Exception as e:
+            bt.logging.error(f"❌ Exception in set_weight_capped_by_gpu: {e}")
+
     def set_weights(self):
         # Remove all negative scores and attribute them 0.
         self.scores[self.scores < 0] = 0
@@ -1411,6 +1624,360 @@ class Validator:
         else:
             return None
 
+    def current_epoch(self, blk: int | None = None) -> int:
+        return (blk or self.current_block) // self.blocks_per_epoch
+
+    def epoch_is_pog(self, ep: int | None = None) -> bool:
+        return (ep if ep is not None else self.current_epoch()) % 2 == 0
+
+    def epoch_start_block(self, ep: int | None = None) -> int:
+        e = ep if ep is not None else self.current_epoch()
+        return e * self.blocks_per_epoch
+
+    def my_sybil_slot(self, ep: int | None = None) -> tuple[int, int]:
+        """
+        Return (slot_start, slot_end) for the Sybil-PoG epoch.
+        If our hotkey isn’t in the on-chain validator set and allow_fake_sybil_slot=False,
+        Returns slot 0 otherwise.
+        """
+        ep    = ep if ep is not None else self.current_epoch()
+        start = self.epoch_start_block(ep)
+
+        # ─── grab validator set and our own hotkey ────────────────────────
+        vals = sorted(self.get_valid_validator_hotkeys())
+
+        hotkey_obj = self.wallet.hotkey
+        # Keypair itself vs actual ss58 string:
+        my_hk_obj = hotkey_obj
+        my_hk     = getattr(hotkey_obj, "ss58_address", None) or str(hotkey_obj)
+
+        if not hasattr(self, "_logged_val_epochs"):
+            self._logged_val_epochs: set[int] = set()
+        if ep not in self._logged_val_epochs:
+            bt.logging.trace(f"[Sybil-PoG] Validator set for epoch {ep} ({len(vals)} entries): {vals}")
+            self._logged_val_epochs.add(ep)
+
+        # ─── determine our slot index ─────────────────────────────────────
+        if my_hk in vals:
+            slots = len(vals)
+            idx   = vals.index(my_hk)
+        else:
+            # not in set → fallback
+            if self.allow_fake_sybil_slot:
+                bt.logging.warning(f"[Sybil-PoG] Hotkey {my_hk} not in validator set; using fake slot#0 (allow_fake_sybil_slot=True).")
+            else:
+                bt.logging.warning(
+                    f"[Sybil-PoG] Hotkey {my_hk} not in validator set "
+                    f"and allow_fake_sybil_slot=False → defaulting to slot#0 in ring size {len(vals)+1}."
+                )
+            slots = len(vals) + 1
+            idx   = 0
+
+        size       = self.blocks_per_epoch // slots
+        slot_start = start + idx * size
+        slot_end   = start + (idx + 1) * size - 1
+
+        # ─── trace the chosen slot once per epoch ──────────────────────────
+        if not hasattr(self, "_logged_slot_epochs"):
+            self._logged_slot_epochs: set[int] = set()
+        if ep not in self._logged_slot_epochs:
+            bt.logging.info(f"[Sybil-PoG] Epoch {ep}: slot {idx}/{slots} → blocks {slot_start}–{slot_end}")
+            self._logged_slot_epochs.add(ep)
+
+        return slot_start, slot_end
+
+
+    def _run_sybil_benchmark(
+        self, uid: int, axon: bt.AxonInfo
+    ) -> tuple[int, str, bool, str | None, int]:
+        """
+        Return (uid, hotkey, passed?, gpu_name, num_gpus) for one miner.
+        Contains extensive TRACE / INFO logging mirroring validator_sybil.py.
+        """
+        hotkey = axon.hotkey
+        allocation_ok, ssh = False, None
+
+        try:
+            bt.logging.trace(f"[Sybil-PoG] ▶ benchmarking {hotkey}")
+
+            # 1) allocation ---------------------------------------------------
+            priv, pub = rsa.generate_key_pair()
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: starting allocation")
+            fut = asyncio.run_coroutine_threadsafe(
+                self.allocate_miner(axon, priv, pub), self.loop
+            )
+            miner_info = fut.result()
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: miner_info after allocation = {repr(miner_info)}")
+            if miner_info is None:
+                bt.logging.trace(f"[Sybil-PoG] {hotkey}: allocator busy / no slot (miner_info is None after allocation SUCCESS)")
+                return uid, hotkey, False, None, 0
+
+            allocation_ok = True
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: allocated, about to start benchmark, allocation_ok={allocation_ok}")
+
+            # 2) SSH connect --------------------------------------------------
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(miner_info["host"],
+                        port     = miner_info.get("port", 22),
+                        username = miner_info["username"],
+                        password = miner_info["password"],
+                        timeout  = 10)
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: SSH OK")
+
+            # 3) upload miner script if needed --------------------------------
+            mp_conf  = self.config_data["merkle_proof"]
+            m_path   = mp_conf["miner_script_path"]
+            miner_py = Path(m_path).read_bytes()
+
+            local_sha  = hashlib.sha256(miner_py).hexdigest()
+            try:
+                remote_sha = ssh.exec_command(
+                    "sha256sum /tmp/miner_script.py | cut -d' ' -f1"
+                )[1].read().decode().strip()
+            except Exception:
+                remote_sha = ""
+
+            if local_sha != remote_sha:
+                bt.logging.trace(f"[Sybil-PoG] {hotkey}: uploading miner_script.py")
+                with ssh.open_sftp().file("/tmp/miner_script.py", "wb") as f:
+                    f.write(miner_py)
+                ssh.exec_command("chmod 755 /tmp/miner_script.py")
+
+            # 4) GPU info -----------------------------------------------------
+            gpu_info = json.loads(
+                ssh.exec_command(
+                    "python3 /tmp/miner_script.py --mode gpu_info"
+                )[1].read().decode()
+            )
+            gnum  = gpu_info["num_gpus"]
+            gname = gpu_info["gpu_names"][0].strip('" \t')
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: reports {gnum} × {gname}")
+
+            GPU_TM   = self.config_data["gpu_time_models"]
+            GPU_VRAM = self.config_data["gpu_performance"]["GPU_AVRAM"]
+            BUFFER   = float(mp_conf["buffer_factor"])
+            SPOTS    = int(mp_conf["spot_per_gpu"])
+
+            if gname not in GPU_TM or gname not in GPU_VRAM:
+                bt.logging.trace(f"[Sybil-PoG] {hotkey}: unknown GPU model")
+                return uid, hotkey, False, None, 0
+
+            m       = GPU_TM[gname]
+            t_exp   = m["a0"] + m["a1"] * gnum + m["a2"] * (gnum ** 2)
+            deadline= t_exp * m["tol"]
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: t_exp={t_exp:.2f}s  "
+                            f"deadline={deadline:.2f}s")
+
+            # 5) matrix size --------------------------------------------------
+            vram_gib = float(GPU_VRAM[gname])
+            n = max(256, int(((vram_gib * BUFFER * 1e9) / (3 * 4)) ** 0.5 // 32 * 32))
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: matrix n={n}")
+
+            # 6) seeds file ---------------------------------------------------
+            seeds = {gid: (random.randrange(2**32), random.randrange(2**32))
+                    for gid in range(gnum)}
+            seed_txt = "\n".join(
+                [str(n)] + [f"{gid} {a} {b}" for gid, (a, b) in seeds.items()]
+            )
+            with ssh.open_sftp().file("/tmp/seeds.txt", "wb") as f:
+                f.write(seed_txt.encode())
+
+            # 7) compute phase ------------------------------------------------
+            t0   = time.time()
+            out  = ssh.exec_command(
+                "python3 /tmp/miner_script.py --mode compute"
+            )[1].read().decode()
+            t_compute = time.time() - t0
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: compute {t_compute:.2f}s")
+            if t_compute > deadline:
+                bt.logging.trace(f"[Sybil-PoG] {hotkey}: exceeded deadline")
+                return uid, hotkey, False, None, 0
+
+            roots = {gid: bytes.fromhex(rh) for gid, rh in
+                    json.loads(next(l[6:] for l in out.splitlines()
+                                    if l.startswith("ROOTS:")))}
+
+            # 8) challenge indices -------------------------------------------
+            idxs = {
+                gid: [(random.randrange(0, 2 * n), random.randrange(0, n))
+                    for _ in range(SPOTS)]
+                for gid in range(gnum)
+            }
+            idx_txt = "\n".join(
+                f"{gid} " + ";".join(f"{i},{j}" for i, j in pairs)
+                for gid, pairs in idxs.items()
+            )
+            with ssh.open_sftp().file("/tmp/challenge_indices.txt", "wb") as f:
+                f.write(idx_txt.encode())
+
+            # 9) proof phase --------------------------------------------------
+            ssh.exec_command("python3 /tmp/miner_script.py --mode proof")[1].read()
+
+            # 10) download responses -----------------------------------------
+            resps = {}
+            with ssh.open_sftp() as sftp:
+                for gid in range(gnum):
+                    tmp = tempfile.NamedTemporaryFile(delete=False).name
+                    sftp.get(f"/dev/shm/resp_{gid}.npy", tmp)
+                    resps[gid] = np.load(tmp, allow_pickle=True).item()
+                    os.unlink(tmp)
+
+            # 11) verification ----------------------------------------------
+            for gid in range(gnum):
+                sA, sB = seeds[gid]
+                for (i, j), row, proof in zip(
+                        idxs[gid], resps[gid]["rows"], resps[gid]["proofs"]):
+
+                    if i < n:
+                        exp = sum(prng(sA, i, k) * prng(sB, k, j) for k in range(n))
+                    else:
+                        exp = sum(prng(sB, i - n, k) * prng(sA, k, j) for k in range(n))
+
+                    if (not np.isclose(exp, row[j], rtol=1e-3, atol=1e-4) or
+                            not merkle_ok(row, proof, roots[gid], i, 2 * n)):
+                        bt.logging.trace(f"[Sybil-PoG] {hotkey}: proof mismatch")
+                        return uid, hotkey, False, None, 0
+
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: PASS")
+            return uid, hotkey, True, gname, gnum
+
+        except Exception as e:
+            bt.logging.trace(f"[Sybil-PoG] {hotkey}: exception {e}")
+            return uid, hotkey, False, None, 0
+
+        finally:
+            if allocation_ok:
+                asyncio.run_coroutine_threadsafe(
+                    self.deallocate_miner(axon, pub), self.loop
+                )
+            if ssh:
+                try:
+                    ssh.close()
+                except Exception:
+                    pass
+
+    async def proof_of_gpu_sybil(self) -> None:
+        """
+        Orchestrates the Sybil-PoG benchmark **once per Sybil epoch** inside
+        our personal validator slot.
+
+        High-level flow:
+        • wait until our slot starts (w/ small random jitter)
+        • pick miners that are *not* currently allocated elsewhere
+        • run `_run_sybil_benchmark()` on them in parallel
+        • update / purge PoG-DB entries accordingly
+        """
+        try:
+            # ─── 1 determine slot ───────────────────────────────────────────
+            slot_start, slot_end = self.my_sybil_slot()
+            bt.logging.trace(
+                f"[Sybil-PoG] My slot this epoch: blocks {slot_start}–{slot_end}"
+            )
+
+            latest_start = slot_end - self.max_challenge_blocks
+            if self.current_block >= latest_start:
+                bt.logging.warning("[Sybil-PoG] Slot almost over – skipping.")
+                return
+
+            # ─── 2 un-predictable delay so miners can’t pre-compute ─────────
+            delay_blocks = random.randint(
+                1, min(self.rand_delay_blocks_max, latest_start - self.current_block),
+            )
+            bt.logging.trace(
+                f"[Sybil-PoG] Sleeping {delay_blocks} blocks "
+                f"({delay_blocks*12}s) before launching challenges."
+            )
+            await asyncio.sleep(delay_blocks * 12)
+
+            # ─── 3 choose target miners ─────────────────────────────────────
+            self._queryable_uids = self.get_queryable()
+            allocated = self.wandb.get_allocated_hotkeys(
+                self.get_valid_validator_hotkeys(), True
+            )
+            axons = [
+                (uid, ax) for uid, ax in self._queryable_uids.items()
+                if ax.hotkey not in allocated
+            ]
+            bt.logging.info(f"[Sybil-PoG] Challenging {len(axons)} miners")
+
+            # ─── 4 launch benchmarks in parallel threads ────────────────────
+            loop = asyncio.get_running_loop()
+
+            num_miners = len(axons)
+            bt.logging.trace(f"[Sybil-PoG] Launching benchmarks for {num_miners} miners with max_workers={num_miners}")
+
+            # dedicate a *fresh* pool large enough for *all* miners this round
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(axons)) as pool:
+                tasks = [
+                    loop.run_in_executor(pool, self._run_sybil_benchmark, uid, ax)
+                    for uid, ax in axons
+                ]
+                slot_size = slot_end - slot_start
+                available_blocks = max(0, slot_size - delay_blocks)
+                timeout_blocks = min(self.max_challenge_blocks, available_blocks)
+                timeout_seconds = max(60, timeout_blocks * 12)
+
+                bt.logging.trace(f"[Sybil-PoG] Timeout set to {timeout_seconds:.1f}s "
+                                f"(slot size: {slot_size}, delay: {delay_blocks}, "
+                                f"available (blocks): {available_blocks}, capped to (blocks): {timeout_blocks})")
+
+                try:
+                    done, pending = await asyncio.wait(tasks, timeout=timeout_seconds)
+                    bt.logging.info(f"[Sybil-PoG] Benchmarks done. {len(done)} completed, {len(pending)} pending")
+                except Exception as e:
+                    bt.logging.error(f"[Sybil-PoG] Exception during asyncio.wait: {e}")
+                    return
+
+            for fut in pending:
+                fut.cancel()
+                bt.logging.warning(f"[Sybil-PoG] Task {fut} timed out and was cancelled")
+
+            for fut in done:
+                try:
+                    result = fut.result()
+                    # Log result
+                except Exception as e:
+                    bt.logging.error(f"[Sybil-PoG] Task Exception: {e!r}")
+
+            # ─── 5 post-process results ─────────────────────────────────────
+            passed, failed = 0, 0
+
+            # 1) all on-chain hotkeys
+            onchain_hotkeys = {
+                self.metagraph.axons[uid].hotkey
+                for uid in self.uids
+            }
+
+            # 2) track who actually passed this round
+            passed_hotkeys = set()
+            for fut in done:
+                uid, hotkey, ok, gname, gnum = fut.result()
+                if ok:
+                    update_pog_stats(self.db, hotkey, gname, gnum)
+                    passed += 1
+                    passed_hotkeys.add(hotkey)
+                else:
+                    failed += 1
+
+            # 3) rebuild penalized_hotkeys from scratch:
+            #    everyone on-chain who didn’t pass this round
+            self.penalized_hotkeys = [
+                hk for hk in onchain_hotkeys
+                if hk not in passed_hotkeys
+            ]
+
+            bt.logging.trace(f"PoG post-process: {passed} passed, {failed} failed; penalized: {self.penalized_hotkeys}")
+
+            bt.logging.success(
+                f"[Sybil-PoG] Completed – {passed} PASS, {failed} FAIL, "
+                f"{len(pending)} timeout."
+            )
+            self.sync_scores()
+
+        except Exception as e:
+            bt.logging.error(f"[Sybil-PoG] exception: {e}\n{traceback.format_exc()}")
+
     async def start(self):
         """The Main Validation Loop"""
         self.loop = asyncio.get_running_loop()
@@ -1422,15 +1989,28 @@ class Validator:
         block_next_hardware_info = 1
         block_next_miner_checking = 1
 
+        last_pog_epoch   = -1
+        last_sybil_epoch = -1
+
         time_next_pog = None
         time_next_sync_status = None
         time_next_set_weights = None
         time_next_hardware_info = None
 
+        time_next_legacy_pog  = None
+        time_next_sybil       = None
+        block_next_legacy_pog = 1
+        block_next_sybil      = 1
+
         bt.logging.info("Starting validator loop.")
         while True:
             try:
                 self.sync_local()
+                epoch = self.current_epoch()
+                self.refresh_config_from_server()
+
+                hk_obj = self.wallet.hotkey
+                my_hk  = getattr(hk_obj, "ss58_address", None) or str(hk_obj)
 
                 if self.current_block not in self.blocks_done:
                     self.blocks_done.add(self.current_block)
@@ -1442,16 +2022,75 @@ class Validator:
                         not block_next_hardware_info == 1 and self.validator_perform_hardware_query, block_next_hardware_info
                     )
 
-                    # Perform proof of GPU (pog) queries
-                    if self.current_block % block_next_pog == 0 or block_next_pog < self.current_block:
-                        block_next_pog = self.current_block + 360
+                    if self.epoch_is_pog(epoch):          # we are in an even epoch already
+                        next_legacy_epoch = epoch + 2     # jump to the *next* even epoch
+                    else:                                 # we are in an odd epoch
+                        next_legacy_epoch = epoch + 1     # next epoch is even
+                    block_next_legacy_pog = self.epoch_start_block(next_legacy_epoch)
+                    time_next_legacy_pog  = calculate_next_block_time(
+                        self.current_block, block_next_legacy_pog
+                    )
 
-                        if self.gpu_task is None or self.gpu_task.done():
-                            # Schedule proof_of_gpu as a background task
-                            self.gpu_task = asyncio.create_task(self.proof_of_gpu())
-                            self.gpu_task.add_done_callback(self.on_gpu_task_done)
-                        else:
-                            bt.logging.info("Proof-of-GPU task is already running.")
+                    # Next personal Sybil slot
+                    if not self.epoch_is_pog(epoch):        # we’re already in a Sybil epoch
+                        slot_start, _ = self.my_sybil_slot(epoch)
+                        if self.current_block < slot_start:         # slot still ahead
+                            block_next_sybil = slot_start
+                            next_sybil_epoch = epoch
+                        else:                                       # slot has passed: jump 2 epochs
+                            next_sybil_epoch = epoch + 2
+                            block_next_sybil, _ = self.my_sybil_slot(next_sybil_epoch)
+                    else:                                   # currently even epoch → next epoch is odd
+                        next_sybil_epoch = epoch + 1
+                        block_next_sybil, _ = self.my_sybil_slot(next_sybil_epoch)
+
+                    time_next_sybil = calculate_next_block_time(
+                        self.current_block, block_next_sybil
+                    )
+
+                    DEBUG_FAST_SYBIL = False   # <— flip to False to restore normal scheduling
+
+                    if DEBUG_FAST_SYBIL:
+                        # one-time initialisation
+                        if not hasattr(self, "_next_fast_sybil_block"):
+                            self._next_fast_sybil_block = self.current_block + 	self.max_challenge_blocks + 1
+                            bt.logging.info(
+                                f"[DEBUG] First fast Sybil planned at block {self._next_fast_sybil_block}"
+                            )
+
+                        # launch when due
+                        if self.current_block >= self._next_fast_sybil_block:
+                            if self.gpu_task is None or self.gpu_task.done():
+                                bt.logging.info("[DEBUG] Launching fast-loop proof_of_gpu_sybil()")
+                                # skip the slot checks INSIDE that function for debug runs
+                                self.gpu_task = asyncio.create_task(self.proof_of_gpu_sybil())
+
+                            # schedule the next run just once, *after* we decide to launch
+                            jitter  = random.randint(1, self.rand_delay_blocks_max)   # 1-5 blocks
+                            cushion = random.randint(2, 3)                       # safety margin
+                            self._next_fast_sybil_block = (
+                                self.current_block + self.max_challenge_blocks + jitter + cushion
+                            )
+                            bt.logging.info(
+                                f"[DEBUG] Next fast Sybil planned at block {self._next_fast_sybil_block}"
+                            )
+
+                    else:
+                        if self.epoch_is_pog(epoch):           # even → legacy PoG
+                            if epoch != last_pog_epoch and \
+                            self.current_block % self.blocks_per_epoch == 0:
+                                if self.gpu_task is None or self.gpu_task.done():
+                                    self.gpu_task = asyncio.create_task(self.proof_of_gpu())
+                                    self.gpu_task.add_done_callback(self.on_gpu_task_done)
+                                last_pog_epoch = epoch
+                        else:                                   # odd → PoG-Sybil
+                            if my_hk in self.sybil_eligible_hotkeys:
+                                slot_start, _ = self.my_sybil_slot(epoch)
+                                if (epoch != last_sybil_epoch and
+                                        self.current_block == slot_start):
+                                    if self.gpu_task is None or self.gpu_task.done():
+                                        self.gpu_task = asyncio.create_task(self.proof_of_gpu_sybil())
+                                    last_sybil_epoch = epoch
 
                     # Perform specs queries
                     if (self.current_block % block_next_hardware_info == 0 and self.validator_perform_hardware_query) or (
@@ -1492,8 +2131,7 @@ class Validator:
                     if self.current_block - self.last_updated_block > weights_rate_limit:
                         block_next_set_weights = self.current_block + weights_rate_limit
                         self.sync_scores()
-                        #self.set_weights()
-                        self.set_burn_weights()
+                        self.set_weight_capped_by_gpu()
                         self.last_updated_block = self.current_block
                         self.blocks_done.clear()
                         self.blocks_done.add(self.current_block)
@@ -1529,6 +2167,19 @@ class Validator:
                 bt.logging.success("Keyboard interrupt detected. Exiting validator.")
                 exit()
 
+            bt.logging.info(
+            (
+                f"Block:{self.current_block} | "
+                f"Stake:{self.metagraph.S[self.validator_subnet_uid]} | "
+                f"Rank:{self.metagraph.R[self.validator_subnet_uid]} | "
+                f"vTrust:{self.metagraph.validator_trust[self.validator_subnet_uid]} | "
+                f"Emission:{self.metagraph.E[self.validator_subnet_uid]} | "
+                f"next_PoG_legacy:  #{block_next_legacy_pog} ~ {time_next_legacy_pog} | "
+                f"next_PoG_sybil: #{block_next_sybil} ~ {time_next_sybil} | "
+                f"sync_status:   #{block_next_sync_status} ~ {time_next_sync_status} | "
+                f"set_weights:   #{block_next_set_weights} ~ {time_next_set_weights} | "
+            )
+)
 
 def main():
     """
