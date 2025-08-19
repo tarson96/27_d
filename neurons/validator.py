@@ -18,9 +18,11 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import random
+import tempfile
 import threading
 import traceback
 import uuid
@@ -60,6 +62,7 @@ from compute.wandb.wandb import ComputeWandb
 from neurons.Validator.calculate_pow_score import calc_score_pog
 from neurons.Validator.database.allocate import update_miner_details, get_miner_details
 from neurons.Validator.database.miner import select_miners, purge_miner_entries, update_miners
+from neurons.Validator.health_check import perform_health_check
 from neurons.Validator.pog import prng, adjust_matrix_size, compute_script_hash, execute_script_on_miner, get_random_seeds, load_yaml_config, parse_merkle_output, receive_responses, send_challenge_indices, send_script_and_request_hash, parse_benchmark_output, identify_gpu, send_seeds, verify_merkle_proof_row, get_remote_gpu_info, verify_responses, merkle_ok
 from neurons.Validator.database.pog import get_pog_specs, retrieve_stats, update_pog_stats, write_stats, purge_pog_stats
 
@@ -1229,20 +1232,7 @@ class Validator:
         docker_requirement = {
             "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
         }
-
-            # Define device requirements (customize as needed)
-            device_requirement = {
-                "cpu": {"count": 1},
-                "gpu": {},
-                "hard_disk": {"capacity": 1073741824},
-                "ram": {"capacity": 1073741824},
-                "testing": True
-            }
-            device_requirement["gpu"] = {"count": 1, "capacity": 0, "type": ""}
-
-            docker_requirement = {
-                "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
-            }
+        try:
 
             async with bt.dendrite(wallet=self.wallet) as dendrite:
                 # Simulate an allocation query with Allocate
@@ -1264,11 +1254,11 @@ class Validator:
                         timeout=60,
                     )
 
-                    if rsp and rsp.get("status", False):
+                    if response and response.get("status", False):
                         # ---- decrypt allocator’s reply -----------------------
                         dec  = rsa.decrypt_data(
                             private_key.encode(),
-                            base64.b64decode(rsp["info"]),
+                            base64.b64decode(response["info"]),
                         )
                         info = json.loads(dec)
 
@@ -1313,7 +1303,7 @@ class Validator:
                         allocation_error='No response receivedfor miner pre-allocation'
                     )
 
-        except ConnectionRefusedError as cre:
+        except ConnectionRefusedError as e:
             bt.logging.debug(f"{axon.hotkey}: Connection refused during miner allocation: {e}")
             self.pubsub_client.publish_miner_allocation(
                 miner_hotkey=axon.hotkey,
