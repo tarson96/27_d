@@ -340,6 +340,8 @@ Before configuring your firewall, we recommend using our **port validation scrip
 python3 scripts/validate_miner_ports.py
 ```
 
+**⚠️ IMPORTANT: Ensure the ports you're testing are NOT being used by other services (including your miner) before running this validation script. The script needs to bind to these ports to test accessibility.**
+
 This tool will:
 - ✅ **Test external accessibility** of all three required ports
 - ✅ **Check firewall configuration** (UFW status and rules)
