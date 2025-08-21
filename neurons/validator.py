@@ -464,9 +464,7 @@ class Validator:
                     score = 0
 
                 self.stats[uid]["score"] = score*100
-                # Only replace if we actually have new information
-                if gpu_specs is not None:
-                    self.stats[uid]["gpu_specs"] = gpu_specs
+                self.stats[uid]["gpu_specs"] = gpu_specs
 
                 # Keep or override reliability_score if you want
                 if "reliability_score" not in self.stats[uid]:
@@ -678,6 +676,7 @@ class Validator:
         """
         Retrieves hardware specifications from Wandb, updates the miner_details table,
         and checks for differences in GPU specs, logging changes only for allocated hotkeys.
+        Entries not present in Wandb will increment no_specs_count and be removed after 2 fails.
         """
         bt.logging.info(f"💻 Hardware list of uids queried (Wandb): {list(self._queryable_uids.keys())}")
 
@@ -689,7 +688,7 @@ class Validator:
 
         # Compare and detect GPU spec changes for allocated hotkeys
         for hotkey, new_specs in specs_dict.values():
-            if hotkey in self.allocated_hotkeys:  # Check if hotkey is allocated
+            if hotkey in self.allocated_hotkeys:
                 current_specs = current_miner_details.get(hotkey, {})
                 current_gpu_specs = current_specs.get("gpu", {})
                 new_gpu_specs = new_specs.get("gpu", {})
@@ -726,20 +725,11 @@ class Validator:
                         bt.logging.info(f"New count: {new_count}, New name: {new_name}")
                         await self.deallocate_miner(axon, None)
 
-        # Update the local db with the new data from Wandb
-        update_miner_details(self.db, list(specs_dict.keys()), list(specs_dict.values()))
+        # Collect the hotkeys present in Wandb this pass
+        present_hotkeys = {hk for (hk, _specs) in specs_dict.values()}
 
-        # Log the hotkey and specs
-        # bt.logging.info(f"✅ GPU specs per hotkey (Wandb):")
-        # for hotkey, specs in specs_dict.values():
-        #     gpu_info = specs.get("gpu", {})
-        #     gpu_details = gpu_info.get("details", [])
-        #     if gpu_details:
-        #         gpu_name = gpu_details[0].get("name", "Unknown GPU")
-        #         gpu_count = gpu_info.get("count", 1)  # Assuming 'count' reflects the number of GPUs
-        #         bt.logging.info(f"{hotkey}: {gpu_name} x {gpu_count}")
-        #     else:
-        #         bt.logging.info(f"{hotkey}: No GPU details available")
+        # Update the local db with the new data from Wandb
+        update_miner_details(self.db, present_hotkeys, list(specs_dict.values()))
 
         self.finalized_specs_once = True
 
@@ -962,6 +952,10 @@ class Validator:
             bt.logging.trace(f"{hotkey}: FP32: {fp32_tflops:.2f} TFLOPS")
             gpu_name = identify_gpu(fp16_tflops, fp32_tflops, vram, gpu_data, gpu_name_reported, gpu_tolerance_pairs)
             bt.logging.trace(f"{hotkey}: [GPU Identification] Based on performance: {gpu_name}")
+            # Step 5.1: Ensure reported GPU matches benchmark-identified GPU
+            if gpu_name != gpu_name_reported:
+                bt.logging.info(f"{hotkey}: GPU mismatch! Reported: {gpu_name_reported}, Benchmarked: {gpu_name}")
+                raise ValueError("Reported GPU and benchmark GPU do not match.")
 
             # Step 6: Run the Merkle proof mode (Sybil-compatible: n, 2n)
             bt.logging.trace(f"{hotkey}: [Step 6] Initiating Merkle Proof Mode.")
@@ -1051,7 +1045,7 @@ class Validator:
             "testing":   True,
         }
         docker_requirement = {
-            "base_image": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
+            "base_image": "pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime",
         }
 
         MAX_TRIES      = 5

@@ -333,12 +333,6 @@ class Miner:
         hotkey = synapse.dendrite.hotkey
         synapse_type = type(synapse).__name__
 
-        if len(self.whitelist_hotkeys) > 0 and hotkey not in self.whitelist_hotkeys:
-            bt.logging.trace(
-                f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"
-            )
-            return False, "Whitelisted hotkey"
-
         if hotkey not in self.metagraph.hotkeys:
             # Ignore requests from unrecognized entities.
             bt.logging.trace(f"Blacklisting unrecognized hotkey {hotkey}")
@@ -352,19 +346,20 @@ class Miner:
             return True, "Not enough stake!"
 
         if len(self.blacklist_hotkeys) > 0 and hotkey in self.blacklist_hotkeys:
-            return True, "Blacklisted hotkey"
+            return True, "Blocked hotkey"
 
-        # Blacklist entities that are not up-to-date
-        # if hotkey not in self.whitelist_hotkeys_version and len(self.whitelist_hotkeys_version) > 0:
-        #     return (
-        #         True,
-        #         f"Blacklisted a {synapse_type} request from a non-updated hotkey: {hotkey}",
-        #     )
+        #Blacklist entities that are not up-to-date
+        if hotkey not in self.whitelist_hotkeys_version and len(self.whitelist_hotkeys_version) > 0:
+            bt.logging.trace(f"Blacklisted a {synapse_type} request from a non-updated hotkey: {hotkey}")
+            return (
+                True,
+                f"Blocked an {synapse_type} request from a non-updated hotkey: {hotkey}",
+            )
 
         if hotkey in self.exploiters_hotkeys_set:
             return (
                 True,
-                f"Blacklisted a {synapse_type} request from an exploiter hotkey: {hotkey}",
+                f"Blacklisted an {synapse_type} request from an exploiter hotkey: {hotkey}",
             )
 
         bt.logging.trace(
