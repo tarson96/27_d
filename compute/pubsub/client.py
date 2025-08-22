@@ -379,6 +379,45 @@ class PubSubClient:
             self.logger.error(f"Failed to publish Miner deallocation result: {e}")
         return None
 
+    async def _publish(
+        self,
+        topic_name: str,
+        topic_path: str,
+        timeout: int,
+        message: PubSubMessage,
+        should_retry: bool = True,
+        **kwargs,
+    ) -> str:
+        try:
+            # Publish message
+            future = self.publisher.publish(topic_path, timeout=timeout, **kwargs)
+
+            # Wait for publish to complete
+            message_id = await asyncio.wait_for(
+                asyncio.wrap_future(future),
+                timeout=timeout
+            )
+
+            self.logger.info(
+                f"Published {message.message_type} message to {topic_name} with ID: {message_id}"
+            )
+            return message_id
+        except gcp_exceptions.Unauthenticated as e:
+            self.logger.warning(f"Token expired for {topic_name}, refreshing credentials...")
+            # Try to refresh credentials with retries
+            if should_retry and self.refresh_credentials():
+                # Credentials refreshed successfully, retry the publish
+                return await self._publish(
+                    topic_name,
+                    topic_path,
+                    timeout,
+                    message,
+                    should_retry=False,
+                    **kwargs,
+                )
+            # Credential refresh failed after retries
+            raise e
+
     async def direct_publish_message(
         self,
         topic_name: str,
@@ -421,19 +460,15 @@ class PubSubClient:
                 maximum=10.0,    # max delay between retries
                 deadline=20.0    # total time allowed for all retries
             )
-            # Publish message
-            future = self.publisher.publish(
+            # Wait for publish to complete
+            message_id = await self._publish(
+                topic_name,
                 topic_path,
+                timeout or self.timeout,
+                message,
                 data=message_data,
                 retry=retry,
-                timeout=timeout or self.timeout,
                 **attributes
-            )
-
-            # Wait for publish to complete
-            message_id = await asyncio.wait_for(
-                asyncio.wrap_future(future),
-                timeout=timeout or self.timeout
             )
 
             self.logger.info(

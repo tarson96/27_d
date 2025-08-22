@@ -1269,7 +1269,7 @@ class Validator:
                             'password': info['password'],
                             'fixed_external_user_port': info.get('fixed_external_user_port', 27015),
                         }
-                        self.pubsub_client.publish_miner_allocation(
+                        await self.pubsub_client.publish_miner_allocation(
                             miner_hotkey=axon.hotkey,
                             allocation_result=True,
                         )
@@ -1281,7 +1281,7 @@ class Validator:
                             bt.logging.warning(f"{axon.hotkey}: Miner allocation request failed.")
                             bt.logging.debug(f"{axon.hotkey}: Miner allocation response: {response}")
 
-                        self.pubsub_client.publish_miner_allocation(
+                        await self.pubsub_client.publish_miner_allocation(
                             miner_hotkey=axon.hotkey,
                             allocation_result=False,
                             allocation_error=(
@@ -1297,7 +1297,7 @@ class Validator:
                         bt.logging.info(f"{axon.hotkey}: Miner pre-allocation failed.")
                         bt.logging.debug(f"{axon.hotkey}: Miner pre-allocation response: {check_allocation}")
 
-                    self.pubsub_client.publish_miner_allocation(
+                    await self.pubsub_client.publish_miner_allocation(
                         miner_hotkey=axon.hotkey,
                         allocation_result=False,
                         allocation_error='No response receivedfor miner pre-allocation'
@@ -1305,14 +1305,14 @@ class Validator:
 
         except ConnectionRefusedError as e:
             bt.logging.debug(f"{axon.hotkey}: Connection refused during miner allocation: {e}")
-            self.pubsub_client.publish_miner_allocation(
+            await self.pubsub_client.publish_miner_allocation(
                 miner_hotkey=axon.hotkey,
                 allocation_result=False,
                 allocation_error='Connection refused during miner allocation'
             )
         except Exception as e:
             bt.logging.warning(f"{axon.hotkey}: Exception during miner allocation for: {e}")
-            self.pubsub_client.publish_miner_allocation(
+            await self.pubsub_client.publish_miner_allocation(
                 miner_hotkey=axon.hotkey,
                 allocation_result=False,
                 allocation_error=f'Miner allocation failed: {str(e)}'
@@ -1398,7 +1398,7 @@ class Validator:
             bt.logging.warning(f"{axon.hotkey}: Unexpected error during deallocation: {e}")
             deallocation_error = f"Miner deallocation failed: {str(e)}"
 
-        self.pubsub_client.publish_miner_deallocation(
+        await self.pubsub_client.publish_miner_deallocation(
             miner_hotkey=miner_hotkey,
             retry_count=retry_count,
             deallocation_result=allocation_status is False,
