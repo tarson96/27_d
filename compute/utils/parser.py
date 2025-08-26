@@ -110,7 +110,7 @@ class ComputeArgPaser(argparse.ArgumentParser):
             dest="validator_whitelist_updated_threshold",
             help="Total quorum before starting the whitelist. Default: 70.",
             type=int,
-            default=60,
+            default=20,
         )
 
     def add_miner_argument(self):
@@ -154,7 +154,7 @@ class ComputeArgPaser(argparse.ArgumentParser):
             dest="miner_whitelist_updated_threshold",
             help="Total quorum before starting the whitelist. Default: 50.",
             type=int,
-            default=60,
+            default=20,
         )
         # add ssh port argument
         self.add_argument(

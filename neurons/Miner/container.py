@@ -272,7 +272,7 @@ def build_check_container(image_name: str, container_name: str):
     try:
         client = docker.from_env()
         dockerfile = '''
-        FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+        FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
         CMD echo "compute-subnet"
         '''
 
@@ -328,7 +328,7 @@ def build_sample_container():
 
     # Dockerfile: Docker image with an SSH server (root login permitted, random password set here)
     dockerfile_content = f"""
-    FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+    FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
     # Prevent interactive prompts during package installation
     ENV DEBIAN_FRONTEND=noninteractive

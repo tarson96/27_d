@@ -29,7 +29,7 @@ def upload_health_check_script(ssh_client: paramiko.SSHClient, health_check_scri
         sftp.close()
         return True
     except Exception as e:
-        bt.logging.error(f"Failed to upload health check script - SFTP error: {e}")
+        bt.logging.debug(f"Failed to upload health check script - SFTP error: {e}")
         return False
 
 def start_health_check_server_background(ssh_client: paramiko.SSHClient, port: int = 27015, timeout: int = 60) -> tuple[bool, paramiko.Channel | None]:
@@ -69,18 +69,18 @@ def start_health_check_server_background(ssh_client: paramiko.SSHClient, port: i
             while channel.recv_stderr_ready():
                 stderr_output += channel.recv_stderr(4096).decode('utf-8', errors='ignore')
 
-            bt.logging.error(f"Health check server crashed immediately on startup - check server logs below")
+            bt.logging.debug(f"Health check server crashed immediately on startup - check server logs below")
             if stdout_output:
-                bt.logging.error(f"Server stdout: {stdout_output.strip()}")
+                bt.logging.debug(f"Server stdout: {stdout_output.strip()}")
             if stderr_output:
-                bt.logging.error(f"Server stderr: {stderr_output.strip()}")
+                bt.logging.debug(f"Server stderr: {stderr_output.strip()}")
 
             if channel:
                 channel.close()
             return False, None
 
     except Exception as e:
-        bt.logging.error(f"Failed to start health check server - transport error: {e}")
+        bt.logging.debug(f"Failed to start health check server - transport error: {e}")
         if channel:
             channel.close()
         return False, None
@@ -152,7 +152,7 @@ def wait_for_port_ready(ssh_client: paramiko.SSHClient, port: int = 27015, timeo
 
         time.sleep(check_interval)
 
-    bt.logging.error(f"{hotkey}: Health check server not responding on port {port} - server may not be running or port may be blocked by firewall")
+    bt.logging.debug(f"{hotkey}: Health check server not responding on port {port} - server may not be running or port may be blocked by firewall")
     return False
 
 def kill_health_check_server(ssh_client: paramiko.SSHClient, port: int = 27015) -> bool:
@@ -221,7 +221,7 @@ def wait_for_health_check(host: str, port: int, timeout: int = 30, retry_interva
                 bt.logging.trace(f"HTTP Health check successful on {host}:{port}!")
                 return True
             else:
-                bt.logging.error(f"HTTP Health check server returned status code {response.status_code} instead of 200 on {host}:{port}")
+                bt.logging.debug(f"HTTP Health check server returned status code {response.status_code} instead of 200 on {host}:{port}")
                 # Continue to next iteration - don't return here
 
         except requests.exceptions.ConnectionError as e:
@@ -233,7 +233,7 @@ def wait_for_health_check(host: str, port: int, timeout: int = 30, retry_interva
 
         time.sleep(retry_interval)
 
-    bt.logging.error(f"External health check failed on {host}:{port} - port may be blocked by firewall or miner is misconfigured")
+    bt.logging.debug(f"External health check failed on {host}:{port} - port may be blocked by firewall or miner is misconfigured")
     return False
 
 def perform_health_check(
@@ -266,13 +266,13 @@ def perform_health_check(
             ssh_client.connect(host, port=miner_info.get('port', 22), username=miner_info['username'], password=miner_info['password'], timeout=10)
             bt.logging.trace(f"{hotkey}: SSH connection successful.")
         except Exception as ssh_error:
-            bt.logging.error(f"{hotkey}: SSH connection failed - miner may be offline or credentials incorrect: {ssh_error}")
+            bt.logging.debug(f"{hotkey}: SSH connection failed - miner may be offline or credentials incorrect: {ssh_error}")
             return False
 
         health_check_script_path = "neurons/Validator/health_check_server.py"
 
         if not upload_health_check_script(ssh_client, health_check_script_path):
-            bt.logging.error(f"{hotkey}: Failed to upload health check script - miner may have insufficient disk space or permissions")
+            bt.logging.debug(f"{hotkey}: Failed to upload health check script - miner may have insufficient disk space or permissions")
             return False
 
         internal_health_check_port = 27015
@@ -280,14 +280,14 @@ def perform_health_check(
         server_started, channel = start_health_check_server_background(ssh_client, internal_health_check_port, timeout=60)
 
         if not server_started or channel is None:
-            bt.logging.error(f"{hotkey}: Failed to start health check server - miner may have insufficient resources or Python not available")
+            bt.logging.debug(f"{hotkey}: Failed to start health check server - miner may have insufficient resources or Python not available")
             return False
 
         server_ready_timeout = 15
 
         bt.logging.debug(f"{hotkey}: Attempting to confirm health check server's internal readiness via port check.")
         if not wait_for_port_ready(ssh_client, internal_health_check_port, server_ready_timeout, hotkey):
-            bt.logging.error(f"{hotkey}: Health check server failed to start properly - server may have crashed or port is blocked")
+            bt.logging.debug(f"{hotkey}: Health check server failed to start properly - server may have crashed or port is blocked")
             return False
 
         bt.logging.debug(f"{hotkey}: Health check server confirmed internally ready via port check.")
@@ -310,7 +310,7 @@ def perform_health_check(
             read_channel_output(channel, hotkey)
 
         if not health_check_success:
-            bt.logging.error(f"{hotkey}: External health check failed - port {external_health_check_port} may be blocked by firewall or miner is misconfigured")
+            bt.logging.debug(f"{hotkey}: External health check failed - port {external_health_check_port} may be blocked by firewall or miner is misconfigured")
             return False
 
         bt.logging.trace(f"{hotkey}: Health check successful. Attempting to kill health check server.")
@@ -320,12 +320,12 @@ def perform_health_check(
                 bt.logging.trace(f"{hotkey}: Reading final server output after termination.")
                 read_channel_output(channel, hotkey)
         else:
-            bt.logging.warning(f"{hotkey}: Failed to explicitly kill health check server, but check was successful. It might be self-terminating.")
+            bt.logging.debug(f"{hotkey}: Failed to explicitly kill health check server, but check was successful. It might be self-terminating.")
 
         return True
 
     except Exception as e:
-        bt.logging.error(f"{hotkey}: Unexpected error during health check - miner may be in an unstable state: {e}")
+        bt.logging.debug(f"{hotkey}: Unexpected error during health check - miner may be in an unstable state: {e}")
         return False
 
     finally:
