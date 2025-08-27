@@ -87,62 +87,26 @@ def update_miner_details(db: ComputeDb, hotkey_list, benchmark_responses: Tuple[
     finally:
         cursor.close()
 """
-
-
-#  Update the miner_details with specs (hotfix for 1.3.11!)
+#  Update the miner_details with specs
 def update_miner_details(db: ComputeDb, hotkey_list, benchmark_responses: Tuple[str, Any]):
+    """
+    Update the miner_details table with the given benchmark responses.
+    - Hotkeys present in Wandb are upserted with their details.
+    - Hotkeys missing from Wandb are treated as failures.
+    - After 2 consecutive failures, a miner is removed from the table.
+    """
     cursor = db.get_cursor()
     try:
-        # Update th database structure while keeping the data
-        # Check the number of columns in the miner_details table
-        cursor.execute("PRAGMA table_info(miner_details);")
-        table_info = cursor.fetchall()
-        column_count = len(table_info)
+        # Retrieve existing hotkeys from the database
+        cursor.execute("SELECT hotkey, no_specs_count FROM miner_details;")
+        existing_rows = cursor.fetchall()
+        existing_hotkeys = {hk for (hk, _cnt) in existing_rows}
 
-        # Check if there is a UNIQUE index on the hotkey column
-        cursor.execute("PRAGMA index_list('miner_details')")
-        indices = cursor.fetchall()
-        hotkey_unique = False
-        for index in indices:
-            cursor.execute(f"PRAGMA index_info('{index[1]}')")
-            index_info = cursor.fetchall()
-            if any(column[2] == 'hotkey' for column in index_info) and index[3] == 0:
-                hotkey_unique = True
-                break
+        present_hotkeys = set(hotkey_list)
 
-        # If there are 3 columns or hotkey lacks a UNIQUE constraint, alter the table
-        if column_count == 3 or not hotkey_unique:
-            # Create a new table with the UNIQUE constraint and no_specs_count column
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS new_miner_details (
-                    id INTEGER PRIMARY KEY,
-                    hotkey TEXT UNIQUE,
-                    details TEXT,
-                    no_specs_count INTEGER DEFAULT 0
-                );
-            """)
-            # Copy data from the old table to the new table
-            cursor.execute("""
-                INSERT INTO new_miner_details (id, hotkey, details)
-                SELECT id, hotkey, details FROM miner_details;
-            """)
-            # Drop the old table
-            cursor.execute("DROP TABLE miner_details;")
-            # Rename the new table to the old table's name
-            cursor.execute("ALTER TABLE new_miner_details RENAME TO miner_details;")
-            db.conn.commit()
-
-        # Update miner_details
+        # Update or insert details for present hotkeys
         for hotkey, response in benchmark_responses:
-            # Print current values in the row before updating
-            cursor.execute("""
-                SELECT * FROM miner_details WHERE hotkey = ?;
-            """, (hotkey,))
-            current_values = cursor.fetchone()
-            # print("Current values in row before updating (hotkey:", hotkey, "):", current_values) # debugging
-
-            if response:  # Check if the response is not empty
-                # Update the existing record with the new details or insert a new one
+            if response:
                 cursor.execute("""
                     INSERT INTO miner_details (hotkey, details, no_specs_count)
                     VALUES (?, ?, 0)
@@ -151,22 +115,43 @@ def update_miner_details(db: ComputeDb, hotkey_list, benchmark_responses: Tuple[
                         no_specs_count = 0;
                 """, (hotkey, json.dumps(response)))
             else:
-                # Increment no_specs_count for the existing record or insert a new one
+                # Increment fail counter and remove after 2 fails
                 cursor.execute("""
                     INSERT INTO miner_details (hotkey, details, no_specs_count)
                     VALUES (?, '{}', 1)
                     ON CONFLICT(hotkey) DO UPDATE SET
                         no_specs_count =
                             CASE
-                                WHEN miner_details.no_specs_count >= 5 THEN 5
+                                WHEN miner_details.no_specs_count >= 2 THEN 2
                                 ELSE miner_details.no_specs_count + 1
                             END,
                         details =
                             CASE
-                                WHEN miner_details.no_specs_count >= 5 THEN '{}'
+                                WHEN miner_details.no_specs_count >= 2 THEN '{}'
                                 ELSE excluded.details
                             END;
-                """, (hotkey, '{}'))
+                """, (hotkey,))
+                cursor.execute("""
+                    DELETE FROM miner_details
+                    WHERE hotkey = ? AND no_specs_count >= 2;
+                """, (hotkey,))
+
+        # Increment fail counters for missing hotkeys and remove after 2 fails
+        missing_hotkeys = list(existing_hotkeys - present_hotkeys)
+        for hk in missing_hotkeys:
+            cursor.execute("""
+                UPDATE miner_details
+                SET no_specs_count = CASE
+                    WHEN no_specs_count >= 2 THEN 2
+                    ELSE no_specs_count + 1
+                END
+                WHERE hotkey = ?;
+            """, (hk,))
+            cursor.execute("""
+                DELETE FROM miner_details
+                WHERE hotkey = ? AND no_specs_count >= 2;
+            """, (hk,))
+
         db.conn.commit()
     except Exception as e:
         db.conn.rollback()
