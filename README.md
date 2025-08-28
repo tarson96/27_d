@@ -332,6 +332,34 @@ Your miner requires **three essential ports** to be opened:
 - **Port 8091 (Axon)**: Used for Bittensor validator-miner communication. **Critical for network functionality.**
 - **Port 27015 (External Fixed Port)**: Fixed external port that clients can use for their own purposes during allocations. **Validators verify this port is accessible - if not open, miners will not appear in the dashboard or pass validation requirements.**
 
+### Port Validation Tool
+
+Before configuring your firewall, we recommend using our **port validation script** to test if your ports are accessible from the internet:
+
+```bash
+python3 scripts/validate_miner_ports.py
+```
+
+**⚠️ IMPORTANT: Ensure the ports you're testing are NOT being used by other services (including your miner) before running this validation script. The script needs to bind to these ports to test accessibility.**
+
+This tool will:
+- ✅ **Test external accessibility** of all three required ports
+- ✅ **Check firewall configuration** (UFW status and rules)
+- ✅ **Detect NAT/router issues** for home networks
+- ✅ **Provide specific troubleshooting steps** based on your setup
+
+**Custom port testing:**
+```bash
+python3 scripts/validate_miner_ports.py --ssh-port 4444 --axon-port 8091 --external-port 27015
+```
+
+The validator provides real-time feedback and troubleshooting guidance for:
+- Cloud platforms requiring security group configuration
+- Home networks requiring port forwarding
+- Firewall configuration issues
+
+### Configure UFW Firewall
+
 1. **Install and configure `ufw`**:
    ```bash
    sudo apt install ufw
@@ -341,6 +369,11 @@ Your miner requires **three essential ports** to be opened:
    sudo ufw allow 27015/tcp  # External fixed port - can be customized
    sudo ufw enable
    sudo ufw status
+   ```
+
+2. **Verify your configuration** by running the validation script again:
+   ```bash
+   python3 scripts/validate_miner_ports.py
    ```
 
 > **Custom Ports**: You can use different ports by opening them with `sudo ufw allow XXXX/tcp` and specifying them in your miner configuration with `--axon.port XXXX`, `--ssh.port XXXX`, or `--external.fixed-port XXXX`. If using a cloud server, ensure these ports are also opened in your provider's firewall/security groups.
