@@ -1260,8 +1260,7 @@ class Validator:
                             'password': info['password'],
                             'fixed_external_user_port': info.get('fixed_external_user_port', 27015),
                         }
-
-                        self.pubsub_client.publish_miner_allocation(
+                        await self.pubsub_client.publish_miner_allocation(
                             miner_hotkey=axon.hotkey,
                             allocation_result=True,
                         )
@@ -1276,7 +1275,7 @@ class Validator:
                             bt.logging.trace(f"{axon.hotkey}: Miner allocation request failed.")
                             bt.logging.trace(f"{axon.hotkey}: Miner allocation response: {rsp}")
 
-                        self.pubsub_client.publish_miner_allocation(
+                        await self.pubsub_client.publish_miner_allocation(
                             miner_hotkey=axon.hotkey,
                             allocation_result=False,
                             allocation_error=(
@@ -1293,7 +1292,7 @@ class Validator:
                     f"{axon.hotkey}: allocator disconnected "
                     f"(attempt {attempt}/{MAX_TRIES}) – {e}"
                 )
-                self.pubsub_client.publish_miner_allocation(
+                await self.pubsub_client.publish_miner_allocation(
                     miner_hotkey=axon.hotkey,
                     allocation_result=False,
                     allocation_error="Allocator disconnected",
@@ -1303,7 +1302,7 @@ class Validator:
                     f"{axon.hotkey}: connection refused "
                     f"(attempt {attempt}/{MAX_TRIES}) – {e}"
                 )
-                self.pubsub_client.publish_miner_allocation(
+                await self.pubsub_client.publish_miner_allocation(
                     miner_hotkey=axon.hotkey,
                     allocation_result=False,
                     allocation_error="Connection refused during miner allocation",
@@ -1311,10 +1310,10 @@ class Validator:
             # -------- any other error → give up immediately --------------------
             except Exception as e:
                 bt.logging.trace(f"{axon.hotkey}: allocation exception – {e}")
-                self.pubsub_client.publish_miner_allocation(
+                await self.pubsub_client.publish_miner_allocation(
                     miner_hotkey=axon.hotkey,
                     allocation_result=False,
-                    allocation_error=f"Miner allocation failed: {str(e)}",
+                    allocation_error=f'Miner allocation failed: {str(e)}'
                 )
                 return None
 
@@ -1323,7 +1322,7 @@ class Validator:
                 await asyncio.sleep(BASE_BACKOFF_S * attempt)
 
         # all retries exhausted
-        self.pubsub_client.publish_miner_allocation(
+        await self.pubsub_client.publish_miner_allocation(
             miner_hotkey=axon.hotkey,
             allocation_result=False,
             allocation_error="All retries exhausted",
@@ -1403,7 +1402,7 @@ class Validator:
             deallocation_error = str(e)
             bt.logging.trace(f"{axon.hotkey}: Unexpected error during deallocation: {e}")
 
-        self.pubsub_client.publish_miner_deallocation(
+        await self.pubsub_client.publish_miner_deallocation(
             miner_hotkey=axon.hotkey,
             retry_count=retry_count,
             deallocation_result=allocation_status is False,
