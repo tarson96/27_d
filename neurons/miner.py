@@ -37,6 +37,7 @@ from compute import (
 from compute.axon import ComputeSubnetAxon, ComputeSubnetSubtensor
 from compute.protocol import Specs, Allocate, Challenge
 from compute.utils.math import percent
+from compute.utils.exceptions import make_error_response
 from compute.utils.parser import ComputeArgPaser
 from compute.utils.socket import check_port
 from compute.utils.subtensor import (
@@ -213,7 +214,11 @@ class Miner:
                 )
 
             if check_container() and not allocation_key_encoded:
-                kill_container()
+                try:
+                    kill_container()
+                except Exception as e:
+                    bt.logging.info(f"Error killing container: {e}")
+
                 self.wandb.update_allocated(None)
                 bt.logging.info(
                     "Container is already running without allocated. Killing the container."
@@ -333,12 +338,6 @@ class Miner:
         hotkey = synapse.dendrite.hotkey
         synapse_type = type(synapse).__name__
 
-        if len(self.whitelist_hotkeys) > 0 and hotkey not in self.whitelist_hotkeys:
-            bt.logging.trace(
-                f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"
-            )
-            return False, "Whitelisted hotkey"
-
         if hotkey not in self.metagraph.hotkeys:
             # Ignore requests from unrecognized entities.
             bt.logging.trace(f"Blacklisting unrecognized hotkey {hotkey}")
@@ -352,19 +351,20 @@ class Miner:
             return True, "Not enough stake!"
 
         if len(self.blacklist_hotkeys) > 0 and hotkey in self.blacklist_hotkeys:
-            return True, "Blacklisted hotkey"
+            return True, "Blocked hotkey"
 
-        # Blacklist entities that are not up-to-date
-        # if hotkey not in self.whitelist_hotkeys_version and len(self.whitelist_hotkeys_version) > 0:
-        #     return (
-        #         True,
-        #         f"Blacklisted a {synapse_type} request from a non-updated hotkey: {hotkey}",
-        #     )
+        #Blacklist entities that are not up-to-date
+        if hotkey not in self.whitelist_hotkeys_version and len(self.whitelist_hotkeys_version) > 0:
+            bt.logging.trace(f"Blacklisted a {synapse_type} request from a non-updated hotkey: {hotkey}")
+            return (
+                True,
+                f"Blocked an {synapse_type} request from a non-updated hotkey: {hotkey}",
+            )
 
         if hotkey in self.exploiters_hotkeys_set:
             return (
                 True,
-                f"Blacklisted a {synapse_type} request from an exploiter hotkey: {hotkey}",
+                f"Blacklisted an {synapse_type} request from an exploiter hotkey: {hotkey}",
             )
 
         bt.logging.trace(
@@ -422,6 +422,7 @@ class Miner:
         checking = synapse.checking
         docker_requirement = synapse.docker_requirement
         docker_requirement["ssh_port"] = int(self.config.ssh.port)
+        docker_requirement["fixed_external_user_port"] = int(self.config.external.fixed_port)
         docker_change = synapse.docker_change
         docker_action = synapse.docker_action
 
@@ -468,8 +469,10 @@ class Miner:
                         self.allocate_action = False
                         synapse.output = result
                     else:
-                        bt.logging.info(f"Allocation is already in progress. Please wait for the previous one to finish")
-                        synapse.output = {"status": False}
+                        synapse.output = make_error_response(
+                            f"Allocation is already in progress. Please wait for the previous one to finish",
+                            status=False,
+                        )
                 else:
                     result = deregister_allocation(public_key)
                     # self.miner_http_server = start_server(self.config.ssh.port)

@@ -21,11 +21,11 @@ Welcome to the **Bittensor NI Compute Subnet** repository. This subnet powers a 
    - [System Requirements](#system-requirements)
    - [Installation Methods](#installation-methods)
    - [Install Docker](#install-docker)
-   - [Install Bittensor](#install-bittensor)
-   - [Create/Regenerate Keys](#create-or-regenerate-keys)
-   - [Clone and Install Compute Subnet](#clone-and-install-compute-subnet)
+   - [Prepare Project Repository](#prepare-project-repository)
    - [CUDA Toolkit and GPU Drivers](#cuda-toolkit-and-gpu-drivers)
    - [NVIDIA Docker Support](#nvidia-docker-support)
+   - [Install Python Dependencies (includes Bittensor)](#install-python-dependencies-includes-bittensor)
+   - [Create/Regenerate Keys](#create-or-regenerate-keys)
    - [WandB Setup](#wandb-setup)
    - [PM2 Setup](#pm2-setup)
 5. [Networking and Firewall](#networking-and-firewall)
@@ -61,7 +61,7 @@ Welcome to the **Bittensor NI Compute Subnet** repository. This subnet powers a 
   [Cloud Platform](https://app.neuralinternet.ai/)
 
 - **Subnet 27 (This Repo)**
-  [GitHub: neuralinternet/compute-subnet](https://github.com/neuralinternet/compute-subnet)
+  [GitHub: neuralinternet/SN27](https://github.com/neuralinternet/SN27)
 
 - **Bittensor**
   [Bittensor Documentation](https://docs.bittensor.com/)
@@ -145,80 +145,20 @@ A Docker environment is required for miner resource allocation:
    ```
    This should display a confirmation message with no errors.
 
-### Install Bittensor
-1. **Run the one-line installer**:
-   ```bash
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/opentensor/bittensor/master/scripts/install.sh)"
-   ```
-2. **Verify Installation**:
-   ```bash
-   btcli --help
-   ```
-   If you get a command-not-found error, add Bittensor to your PATH:
-   ```bash
-   echo 'export PATH=$PATH:$(python3 -m site --user-base)/bin' >> ~/.bashrc
-   source ~/.bashrc
-   ```
-which will give you an output similar to below:
-```
-usage: btcli <command> <command args>
-
-bittensor cli v6.9.4
-
-positional arguments:
-  {subnets,s,subnet,root,r,roots,wallet,w,wallets,stake,st,stakes,sudo,su,sudos,legacy,l,info,i}
-    subnets (s, subnet)
-                        Commands for managing and viewing subnetworks.
-    root (r, roots)     Commands for managing and viewing the root network.
-    wallet (w, wallets)
-                        Commands for managing and viewing wallets.
-    stake (st, stakes)  Commands for staking and removing stake from hotkey accounts.
-    sudo (su, sudos)    Commands for subnet management
-    legacy (l)          Miscellaneous commands.
-    info (i)            Instructions for enabling autocompletion for the CLI.
-
-options:
-  -h, --help            show this help message and exit
-  --print-completion {bash,zsh,tcsh}
-                        Print shell tab completion script
-```
-See Bittensor’s documentation for alternative installation instructions.
-[Bittensor Documentation](https://docs.bittensor.com/)
-
-### Create or Regenerate Keys
-1. **Create new coldkey** (stores funds):
-   ```bash
-   btcli w new_coldkey
-   ```
-2. **Create new hotkey** (used for daily operations e.g. mining/validating/registration):
-   ```bash
-   btcli w new_hotkey
-   ```
-3. **Regenerate existing keys** if needed (to import them on this machine):
-   ```bash
-   btcli w regen_coldkeypub #see below
-   btcli w regen_coldkey
-   btcli w regen_hotkey
-   ```
-
-> **Tip**: For security, you can generate your coldkey on a secure offline machine and only load the public portion onto your miner or validator servers.
-
-### Clone and Install Compute Subnet
+### Prepare Project Repository
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/neuralinternet/nicompute.git
-   cd nicompute
+   git clone https://github.com/neuralinternet/SN27.git
+   cd SN27
    ```
-2. **Install dependencies**:
+
+2. **Create and activate a virtual environment**:
    ```bash
-   python3 -m pip install -r requirements.txt
-   python3 -m pip install --no-deps -r requirements-compute.txt
-   python3 -m pip install -e .
+   python3 -m venv venv
+   source venv/bin/activate
    ```
-3. **In case you have missing requirements**:
-```
-sudo apt -y install ocl-icd-libopencl1 pocl-opencl-icd
-```
+
+> **Important**: We'll install the Python dependencies later, after setting up CUDA and NVIDIA Docker support, as some packages require GPU drivers to be installed first.
 
 ### CUDA Toolkit and GPU Drivers
 > **Tip**: If Nvidia toolkit and drivers are already installed on your machine, scroll down to step 5 to verify then move on to the docker CUDA support.
@@ -294,12 +234,82 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo apt install -y nvidia-docker2
 ```
 
+### Install Python Dependencies (includes Bittensor)
+Now that CUDA and NVIDIA Docker are set up, we can safely install the Python dependencies:
+
+1. **Navigate to the project directory and activate venv** (if not already active):
+   ```bash
+   cd SN27
+   source venv/bin/activate
+   ```
+
+2. **Install all dependencies** (this automatically installs the correct Bittensor version):
+   ```bash
+   pip install -e . -r requirements.txt
+   ```
+
+3. **Install additional system dependencies**:
+   ```bash
+   sudo apt -y install ocl-icd-libopencl1 pocl-opencl-icd
+   ```
+
+4. **Verify Bittensor Installation**:
+   ```bash
+   btcli --help
+   ```
+
+   This will give you an output similar to below:
+   ```
+   usage: btcli <command> <command args>
+
+   bittensor cli v6.9.4
+
+   positional arguments:
+     {subnets,s,subnet,root,r,roots,wallet,w,wallets,stake,st,stakes,sudo,su,sudos,legacy,l,info,i}
+       subnets (s, subnet)
+                           Commands for managing and viewing subnetworks.
+       root (r, roots)     Commands for managing and viewing the root network.
+       wallet (w, wallets)
+                           Commands for managing and viewing wallets.
+       stake (st, stakes)  Commands for staking and removing stake from hotkey accounts.
+       sudo (su, sudos)    Commands for subnet management
+       legacy (l)          Miscellaneous commands.
+       info (i)            Instructions for enabling autocompletion for the CLI.
+
+   options:
+     -h, --help            show this help message and exit
+     --print-completion {bash,zsh,tcsh}
+                           Print shell tab completion script
+   ```
+
+> **Note**: Bittensor is automatically installed with the correct version when you install the project requirements. The Bittensor repository is: https://github.com/opentensor/bittensor
+
+### Create or Regenerate Keys
+Now that Bittensor is installed, you can create your wallet keys:
+
+1. **Create new coldkey** (stores funds):
+   ```bash
+   btcli w new_coldkey
+   ```
+2. **Create new hotkey** (used for daily operations e.g. mining/validating/registration):
+   ```bash
+   btcli w new_hotkey
+   ```
+3. **Regenerate existing keys** if needed (to import them on this machine):
+   ```bash
+   btcli w regen_coldkeypub #see below
+   btcli w regen_coldkey
+   btcli w regen_hotkey
+   ```
+
+> **Tip**: For security, you can generate your coldkey on a secure offline machine and only load the public portion onto your miner or validator servers.
+
 ### WandB Setup
 1. **Create a free WandB account**: [wandb.ai](https://wandb.ai/)
 2. **Obtain an API Key** and place it into your `.env` file:
    ```bash
-   cd compute-subnet
-   read -p "Enter WanDB API key: " wandb_api_key && sed -e s/"your_api_key"/"${wandb_api_key}"/ .env.example > .env
+   cd SN27
+   read -p "Enter WanDB API key: " wandb_api_key && sed -e s/"your_api_key"/"${wandb_api_key}"/ .env.miner > .env
 3. **Monitor stats** at [WandB: neuralinternet/opencompute](https://wandb.ai/neuralinternet/opencompute)
 
 ### PM2 Setup
@@ -315,18 +325,58 @@ pm2 ls
 ---
 
 ## Networking and Firewall
-Open necessary ports:
+
+Your miner requires **three essential ports** to be opened:
+
+- **Port 4444 (SSH)**: Used by validators to access your miner for PoG (Proof of GPU) validation. Validators verify GPU functionality, available resources, and hardware specs through this port. **Required for miners to appear in the network.**
+- **Port 8091 (Axon)**: Used for Bittensor validator-miner communication. **Critical for network functionality.**
+- **Port 27015 (External Fixed Port)**: Fixed external port that clients can use for their own purposes during allocations. **Validators verify this port is accessible - if not open, miners will not appear in the dashboard or pass validation requirements.**
+
+### Port Validation Tool
+
+Before configuring your firewall, we recommend using our **port validation script** to test if your ports are accessible from the internet:
+
+```bash
+python3 scripts/validate_miner_ports.py
+```
+
+**⚠️ IMPORTANT: Ensure the ports you're testing are NOT being used by other services (including your miner) before running this validation script. The script needs to bind to these ports to test accessibility.**
+
+This tool will:
+- ✅ **Test external accessibility** of all three required ports
+- ✅ **Check firewall configuration** (UFW status and rules)
+- ✅ **Detect NAT/router issues** for home networks
+- ✅ **Provide specific troubleshooting steps** based on your setup
+
+**Custom port testing:**
+```bash
+python3 scripts/validate_miner_ports.py --ssh-port 4444 --axon-port 8091 --external-port 27015
+```
+
+The validator provides real-time feedback and troubleshooting guidance for:
+- Cloud platforms requiring security group configuration
+- Home networks requiring port forwarding
+- Firewall configuration issues
+
+### Configure UFW Firewall
 
 1. **Install and configure `ufw`**:
    ```bash
    sudo apt install ufw
-   sudo ufw allow 4444
-   sudo ufw allow 22/tcp
-   sudo ufw allow 8091/tcp #can be altered to a port of your choice. See below in README.md
+   sudo ufw allow 4444       # SSH port for PoG validation
+   sudo ufw allow 22/tcp     # Standard SSH
+   sudo ufw allow 8091/tcp   # Axon port - can be customized
+   sudo ufw allow 27015/tcp  # External fixed port - can be customized
    sudo ufw enable
    sudo ufw status
    ```
-> **Tip**: You can open any ports: `sudo ufw allow xxxx/tcp` and use them as your `axon.port` default e.g. `sudo ufw allow 8091/tcp` and this port would be specified in your pm2 miner proccess arguments as `--axon.port 8091`. If you are using a cloud server it is a good idea to check with your provider if ports are open by default. If you can create your own network rules make sure these inbound rules are applied to the server. Ask your provider for assitance with this netowrking step.
+
+2. **Verify your configuration** by running the validation script again:
+   ```bash
+   python3 scripts/validate_miner_ports.py
+   ```
+
+> **Custom Ports**: You can use different ports by opening them with `sudo ufw allow XXXX/tcp` and specifying them in your miner configuration with `--axon.port XXXX`, `--ssh.port XXXX`, or `--external.fixed-port XXXX`. If using a cloud server, ensure these ports are also opened in your provider's firewall/security groups.
 
 3. **Add user to docker group** (if not already):
    ```bash
@@ -378,8 +428,26 @@ pm2 start ./neurons/miner.py --name <MINER_NAME> --interpreter python3 -- \
 - **`--wallet.name`** & **`--wallet.hotkey`**: The coldkey/hotkey names you created [above](#create-or-regenerate-keys) and used in registration (btcli's defaults are `default` and `default` but both can be freely customized)
 - **`--axon.port`**: default 8091 can be replaced with any port number allowed by ufw as instructed [above](#networking-and-firewall) to serve your axon. Important for proper functionality and miner<->validator communication.
 - **`--ssh.port`**: A port opened with UFW as instructed [above](#networking-and-firewall) (e.g., 4444) used for allocating your miner via ssh.
+- **`--external.fixed-port`**: A port opened with UFW as instructed [above](#networking-and-firewall) (default: 27015) that clients can use for their own purposes during allocations. Required for validation.
 - **`--auto-update`**: Enables automatic updating of the miner. When enabled, the miner will internally perform the update process (e.g., running `git pull`, installing dependencies, and restarting via PM2) so that no manual action is required.
 
+### Configuration File Usage (Alternative to Long CLI Commands)
+
+Instead of using long PM2 commands with many flags, you can use a configuration file:
+
+#### Option 1: Command Line Flags (Current)
+```bash
+pm2 start ./neurons/miner.py --name MINER --interpreter python3 -- \
+  --netuid 27 --subtensor.network finney --wallet.name default --wallet.hotkey default \
+  --axon.port 8091 --ssh.port 4444 --external.fixed-port 27015 --logging.debug --auto_update yes
+```
+
+#### Option 2: Configuration File (Recommended)
+1. Copy the example config: `cp miner.config.example.json miner.config.json`
+2. Edit `miner.config.json` with your settings
+3. Run: `pm2 start ./neurons/miner.py --name MINER --interpreter python3 -- --config miner.config.json`
+
+**Benefits:** Cleaner commands, easier management, less error-prone.
 
 ### Miner Options
 - `--miner.whitelist.not.enough.stake`: Whitelist validators lacking sufficient stake (default: False).
@@ -413,6 +481,8 @@ Check Miner Score Wandb Step 3: Check Stats/Score
 
 ## Running a Validator
 Validators measure and score miner performance, adjusting on-chain weights accordingly.
+
+**Environment Setup for Validators**: Validators use `.env.validator` for additional configuration variables not needed by miners.
 
 **General Validator Command**:
 ```bash
@@ -495,7 +565,7 @@ Example output:
 Name: nicompute
 Version: 1.8.3
 Summary: nicompute-subnet27
-Home-page: https://github.com/neuralinternet/nicompute
+Home-page: https://github.com/neuralinternet/SN27
 License: MIT
 ```
 
@@ -503,7 +573,7 @@ License: MIT
 
 ## Reward Program for Contributions
 We encourage community involvement in improving **Compute Subnet**. A **bounty program** is in place to reward valuable contributions.
-See the **[Reward Program for Valuable Contributions](https://github.com/neuralinternet/compute-subnet/blob/main/CONTRIBUTING.md)** for details.
+See the **[Reward Program for Valuable Contributions](https://github.com/neuralinternet/SN27/blob/main/CONTRIBUTING.md)** for details.
 
 
 ---

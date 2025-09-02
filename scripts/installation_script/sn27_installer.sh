@@ -2,20 +2,24 @@
 set -u
 set -o history -o histexpand
 
+# Prevent needrestart from interrupting installations
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
 ##############################################################################
-#                  compute_subnet_installer.sh
+#                  sn27_installer.sh
 ##############################################################################
 #
 # This script will:
 #   1) Check / install Docker, NVIDIA drivers, NVIDIA Docker, and CUDA 12.8
 #   2) Check / install Bittensor
-#   3) Optionally configure compute-subnet (miner) with PM2, if user agrees
+#   3) Optionally configure SN27 (miner) with PM2, if user agrees
 #   4) NOT create any wallets automatically. If no wallet is detected, user
 #      can choose to exit and create it themselves (coldkey/hotkey).
 #
 # Usage:
-#   ./compute_subnet_installer.sh
-#   ./compute_subnet_installer.sh --automated   (non-interactive mode)
+#   ./sn27_installer.sh
+#   ./sn27_installer.sh --automated   (non-interactive mode)
 #
 ##############################################################################
 # 0 means "no reboot needed", 1 means "reboot needed"
@@ -64,7 +68,7 @@ run_apt_get() {
 
 # Function to run apt-get install with non-interactive configuration
 install_package() {
-  DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "$@"
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a sudo -E apt-get install -y "$@"
 }
 
 abort() {
@@ -142,11 +146,58 @@ if docker_installed; then
   fi
 fi
 
-# Define virtual environment directory
-VENV_DIR="${HOME_DIR}/venv"
-if [ -f "${VENV_DIR}/bin/activate" ]; then
-  source "${VENV_DIR}/bin/activate"
-fi
+# Function to setup virtual environment intelligently
+setup_virtual_environment() {
+    local project_venv="${CS_PATH}/venv"
+
+    # 1. If there's an active venv with btcli, use it
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+        if "${VIRTUAL_ENV}/bin/btcli" --version >/dev/null 2>&1; then
+            info "Using active venv with btcli: $VIRTUAL_ENV"
+            VENV_DIR="$VIRTUAL_ENV"
+            return 0
+        fi
+    fi
+
+    # 2. If project venv exists, use it
+    if [ -f "${project_venv}/bin/activate" ]; then
+        info "Found project venv: ${project_venv}"
+        source "${project_venv}/bin/activate"
+        VENV_DIR="$project_venv"
+
+        # Check if it has btcli, otherwise will reinstall dependencies
+        if ! "${project_venv}/bin/btcli" --version >/dev/null 2>&1; then
+            info "Project venv missing btcli, will reinstall dependencies"
+        fi
+        return 0
+    fi
+
+    # 3. Ensure python3-venv is available before creating venv
+    if ! python3 -m ensurepip --version > /dev/null 2>&1; then
+        info "ensurepip not available. Installing python-venv..."
+        py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        run_apt_get update || abort "Failed to update package lists."
+        install_package python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
+    fi
+
+    # 4. Create new venv in project root
+    if [ -w "${CS_PATH}" ]; then
+        info "Creating venv in project: ${project_venv}"
+        python3 -m venv "$project_venv" || abort "Failed to create project venv"
+        source "${project_venv}/bin/activate"
+        VENV_DIR="$project_venv"
+    else
+        # Fallback only if no write permissions in project
+        info "No write permissions in project, using HOME fallback"
+        local fallback_venv="${HOME_DIR}/SN27_venv"
+        python3 -m venv "$fallback_venv" || abort "Failed to create fallback venv"
+        source "${fallback_venv}/bin/activate"
+        VENV_DIR="$fallback_venv"
+    fi
+}
+
+# Initialize VENV_DIR variable
+VENV_DIR=""
 
 ##############################################################################
 #                      3) Check / Install NVIDIA Docker
@@ -206,18 +257,20 @@ CURRENT_CUDA=$(cuda_version_installed)
 
 if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]] || ! btcli_installed; then
   echo
-  echo "                        @@@@                                                                                        @@@@"
-  echo "                       @@@@      @@@@@@@@@@@@@@@@    @@@@@@@@        @@@    @@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@      @@@@"
-  echo "                       @@@      @@@@@@@@@@@@@@@@@    @@@@@@@@@       @@@    @@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@      @@@"
-  echo "                       @@@      @@                   @@@@   @@@      @@@                   @@@                @@@     @@@"
-  echo "                       @@@      @@@@@@@@@@@@@@@@     @@@@    @@@     @@@     @@@@@@@@@@@@@@@@                 @@@     @@@"
-  echo "                       @@@        @@@@@@@@@@@@@@@@   @@@@     @@@    @@@    @@@@@@@@@@@@@@@@                  @@@     @@@"
-  echo "                       @@@                     @@@   @@@@      @@@   @@@   @@@                                @@@     @@@"
-  echo "                       @@@      @@@@@@@@@@@@@@@@@@   @@@@       @@@@@@@@   @@@@@@@@@@@@@@@@@@                 @@@     @@@"
-  echo "                       @@@@     @@@@@@@@@@@@@@@@     @@@@        @@@@@@@   @@@@@@@@@@@@@@@@@@                 @@@    @@@@"
-  echo "                         @@@                                                                                        @@@"
+  echo "  █████                                                                                                                     ██████ "
+  echo "███████       ██████████████████████     █████████            ████     █████████████████████       ██████████████████       ███████"
+  echo "████        ████████████████████████     ██████████           ████     ███████████████████████    █████████████████████        ████"
+  echo "████       █████                         ████   █████         ████                         ████                     ████       ████"
+  echo "████       █████                         ████    █████        ████                         ████                     ████       ████"
+  echo "████        ██████████████████████       ████     █████       ████      ███████████████████████                     ████       ████"
+  echo "████          ██████████████████████     ████      █████      ████     ██████████████████████                       ████       ████"
+  echo "████                            ████     ████        █████    ████    ████                                          ████       ████"
+  echo "████                            ████     ████         █████   ████    ████                                          ████       ████"
+  echo "████        ████████████████████████     ████          ███████████    ████████████████████████                      ████       ████"
+  echo "███████     █████████████████████        ████            █████████    ████████████████████████                      ████    ███████"
+  echo "  █████                                                                                                                     ██████ "
   echo
-  info "This script will install Docker, NVIDIA drivers, NVIDIA Docker, CUDA 12.8, and Bittensor if they are not present. It will then optionally set up the compute-subnet miner."
+  info "This script will install Docker, NVIDIA drivers, NVIDIA Docker, CUDA 12.8, and Bittensor if they are not present. It will then optionally set up the SN27 miner."
   pause_for_user
 
   if docker_installed; then
@@ -316,7 +369,7 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     if ! grep -q "CUDA configuration added by" "${HOME_DIR}/.bashrc"; then
       {
         echo ""
-        echo "# CUDA configuration added by compute_subnet_installer.sh"
+        echo "# CUDA configuration added by sn27_installer.sh"
         echo "export PATH=/usr/local/cuda-12.8/bin:\$PATH"
         echo "export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:\$LD_LIBRARY_PATH"
       } | tee -a "${HOME_DIR}/.bashrc"
@@ -333,21 +386,28 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
   ##############################################################################
   # Attempt to detect or clone the compute-subnet repository
   ##############################################################################
-  COMPUTE_SUBNET_GIT="https://github.com/neuralinternet/ni-compute.git"
-  COMPUTE_SUBNET_DIR="compute-subnet"
+  COMPUTE_SUBNET_GIT="https://github.com/neuralinternet/SN27.git"
+  COMPUTE_SUBNET_DIR="SN27"
 
   # Check if we're already inside a Git repo
   if $AUTOMATED; then
     echo "AUTOMATED mode detected. Setting up compute-subnet..."
-    if [ ! -d "/home/ubuntu/compute-subnet" ]; then
-      echo "Cloning compute-subnet repository..."
-      git clone "$COMPUTE_SUBNET_GIT" /home/ubuntu/compute-subnet || {
-        echo "ERROR: Failed to clone compute-subnet repository."
+    if [ ! -d "/home/ubuntu/SN27" ]; then
+      echo "Cloning SN27 repository..."
+      git clone "$COMPUTE_SUBNET_GIT" /home/ubuntu/SN27 || {
+        echo "ERROR: Failed to clone SN27 repository."
         exit 1
       }
+      # Switch to specified branch if provided
+      if [ -n "${COMPUTE_SUBNET_BRANCH:-}" ] && [ "$COMPUTE_SUBNET_BRANCH" != "main" ]; then
+        echo "Switching to branch: $COMPUTE_SUBNET_BRANCH"
+        cd /home/ubuntu/SN27 && git checkout "$COMPUTE_SUBNET_BRANCH" || {
+          echo "WARNING: Failed to checkout branch $COMPUTE_SUBNET_BRANCH, staying on main"
+        }
+      fi
     fi
-    cd /home/ubuntu/compute-subnet || {
-      echo "ERROR: Failed to change directory to /home/ubuntu/compute-subnet."
+    cd /home/ubuntu/SN27 || {
+      echo "ERROR: Failed to change directory to /home/ubuntu/SN27."
       exit 1
     }
   fi
@@ -359,12 +419,12 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     # Check if we have setup.py / pyproject.toml inside the root
     if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
       info "No setup.py or pyproject.toml in the detected Git root."
-      info "Attempting to find or clone the compute-subnet repo..."
+      info "Attempting to find or clone the SN27 repo..."
       # If the folder doesn't exist, clone it
       if [ ! -d "$COMPUTE_SUBNET_DIR" ]; then
-        git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone compute-subnet."
+        git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone SN27."
       fi
-      cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter compute-subnet directory."
+      cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter SN27 directory."
       CS_PATH="$(pwd)"
     fi
 
@@ -374,13 +434,13 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
 
     if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
       info "Could not find setup.py or pyproject.toml in current directory."
-      info "Attempting to find or clone the compute-subnet repo..."
+      info "Attempting to find or clone the SN27 repo..."
 
       # If no local 'compute-subnet' folder, clone it
       if [ ! -d "$COMPUTE_SUBNET_DIR" ]; then
-        git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone compute-subnet."
+        git clone "$COMPUTE_SUBNET_GIT" || abort "Failed to clone SN27."
       fi
-      cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter compute-subnet directory."
+      cd "$COMPUTE_SUBNET_DIR" || abort "Failed to enter SN27 directory."
       CS_PATH="$(pwd)"
 
       # Double-check we have setup.py or pyproject.toml now
@@ -396,8 +456,8 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
 
   if $AUTOMATED; then
     # Attempt to use /home/ubuntu/compute-subnet as the repo if it exists
-    if [ -f "/home/ubuntu/compute-subnet/setup.py" ] || [ -f "/home/ubuntu/compute-subnet/pyproject.toml" ]; then
-      CS_PATH="/home/ubuntu/compute-subnet"
+    if [ -f "/home/ubuntu/SN27/setup.py" ] || [ -f "/home/ubuntu/SN27/pyproject.toml" ]; then
+      CS_PATH="/home/ubuntu/SN27"
     else
       CS_PATH="$(pwd)"
     fi
@@ -410,58 +470,42 @@ if ! docker_installed || ! nvidia_docker_installed || ! [[ -n "$CURRENT_CUDA" ]]
     else
       CS_PATH="$(pwd)"
       if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
-        abort "Could not find setup.py or pyproject.toml. Please run from within compute-subnet repo root."
+        abort "Could not find setup.py or pyproject.toml. Please run from within SN27 repo root."
       fi
     fi
   fi
 
-  VENV_DIR="${HOME_DIR}/venv"
+  # VENV_DIR will be set by setup_virtual_environment function
 
   cat << "EOF"
 
   =============================================
-    compute-subnet Installer - Miner Setup
+    SN27 Installer - Miner Setup
   =============================================
 EOF
 
-  # Create/activate venv
-  if [ -z "${VIRTUAL_ENV:-}" ] || [ "$VIRTUAL_ENV" != "$VENV_DIR" ]; then
-    if [ -f "$VENV_DIR/bin/activate" ]; then
-      info "Activating existing virtual environment at ${VENV_DIR}..."
-      source "$VENV_DIR/bin/activate"
-    else
-      info "No virtual environment found. Creating one at ${VENV_DIR}..."
-      if ! python3 -m ensurepip --version > /dev/null 2>&1; then
-        info "ensurepip not available. Installing python-venv..."
-        py_ver=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        run_apt_get update || abort "Failed to update package lists."
-        install_package python${py_ver}-venv || abort "Failed to install python${py_ver}-venv."
-      fi
-      python3 -m venv "$VENV_DIR" || abort "Failed to create virtual environment."
-      info "Activating virtual environment..."
-      source "$VENV_DIR/bin/activate"
-    fi
-  fi
+  # Setup virtual environment intelligently
+  setup_virtual_environment
 
-  info "Updating system packages for compute-subnet dependencies..."
+
+  info "Updating system packages for SN27 dependencies..."
   run_apt_get update || abort "Failed to update package lists."
   install_package python3 python3-pip python3-venv build-essential dkms linux-headers-$(uname -r) at || abort "Failed to install required packages."
 
   info "Upgrading pip in the virtual environment..."
   pip install --upgrade pip || abort "Failed to upgrade pip."
 
+  info "Installing SN27 dependencies and package..."
   if [ -f "requirements.txt" ]; then
-    info "Installing base dependencies from requirements.txt..."
-    pip install -r requirements.txt || abort "Failed to install requirements."
+    pip install -e . -r requirements.txt || abort "Failed to install SN27 with requirements."
+  else
+    pip install -e . || abort "Failed to install SN27 (editable)."
   fi
 
   if [ -f "requirements-compute.txt" ]; then
     info "Installing compute-specific dependencies (no-deps) from requirements-compute.txt..."
     pip install --no-deps -r requirements-compute.txt || abort "Failed to install requirements-compute."
   fi
-
-  info "Installing compute-subnet in editable mode..."
-  pip install -e . || abort "Failed to install compute-subnet (editable)."
 
   python -c "import torch" 2>/dev/null
   if [ $? -ne 0 ]; then
@@ -472,20 +516,27 @@ EOF
   info "Installing OpenCL libraries..."
   install_package ocl-icd-libopencl1 pocl-opencl-icd || abort "Failed to install OpenCL libraries."
 
-  info "Installing Node.js, npm and PM2..."
-  run_apt_get update
+  # Check if Node.js and PM2 are already installed
+  if command -v node >/dev/null 2>&1 && command -v pm2 >/dev/null 2>&1; then
+    info "Node.js and PM2 are already installed. Skipping installation."
+    node -v
+    pm2 --version
+  else
+    info "Installing Node.js, npm and PM2..."
+    run_apt_get update
 
-  install_package curl
+    install_package curl
 
-  curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 
-  install_package nodejs || abort "Failed to install Node.js."
+    install_package nodejs || abort "Failed to install Node.js."
 
-  node -v
+    node -v
 
-  sudo npm install -g pm2 || abort "Failed to install PM2."
+    sudo npm install -g pm2 || abort "Failed to install PM2."
 
-  pm2 --version || echo "PM2 installation may have issues."
+    pm2 --version || echo "PM2 installation may have issues."
+  fi
 fi
 
 ##############################################################################
@@ -661,8 +712,8 @@ info "UFW is enabled. Allowed ports: 22 (SSH), 4444 (validator), ${AXON_PORT} (A
 # Verify and set CS_PATH if not defined
 if [ -z "${CS_PATH:-}" ]; then
   if $AUTOMATED; then
-    if [ -f "/home/ubuntu/compute-subnet/setup.py" ] || [ -f "/home/ubuntu/compute-subnet/pyproject.toml" ]; then
-      CS_PATH="/home/ubuntu/compute-subnet"
+    if [ -f "/home/ubuntu/SN27/setup.py" ] || [ -f "/home/ubuntu/SN27/pyproject.toml" ]; then
+      CS_PATH="/home/ubuntu/SN27"
     else
       CS_PATH="$(pwd)"
     fi
@@ -672,7 +723,7 @@ if [ -z "${CS_PATH:-}" ]; then
     else
       CS_PATH="$(pwd)"
       if [ ! -f "$CS_PATH/setup.py" ] && [ ! -f "$CS_PATH/pyproject.toml" ]; then
-        abort "Could not find setup.py or pyproject.toml. Please run from within compute-subnet repo root."
+        abort "Could not find setup.py or pyproject.toml. Please run from within SN27 repo root."
       fi
     fi
   fi
@@ -697,13 +748,13 @@ check_existing_wandb_key() {
 }
 
 inject_wandb_env() {
-  local env_example="${CS_PATH}/.env.example"
+  local env_miner="${CS_PATH}/.env.miner"
   local env_path="${CS_PATH}/.env"
-  info "Configuring .env for compute-subnet..."
+  info "Configuring .env for SN27..."
 
-  if [[ ! -f "$env_path" && -f "$env_example" ]]; then
-    info "Copying .env.example to .env"
-    cp "$env_example" "$env_path" || abort "Failed to copy .env.example to .env"
+  if [[ ! -f "$env_path" && -f "$env_miner" ]]; then
+    info "Copying .env.miner to .env"
+    cp "$env_miner" "$env_path" || abort "Failed to copy .env.miner to .env"
   fi
 
   if [[ -n "$WANDB_API_KEY" ]]; then
@@ -735,8 +786,10 @@ inject_wandb_env
 #                      11) PM2 miner launch
 ##############################################################################
 
-# Ensure VENV_DIR is defined
-VENV_DIR="${HOME_DIR}/venv"
+# Ensure VENV_DIR is defined - call setup if not already set
+if [ -z "${VENV_DIR:-}" ]; then
+  setup_virtual_environment
+fi
 
 if [ ! -f "${CS_PATH}/neurons/miner.py" ]; then
   abort "miner.py not found in ${CS_PATH}/neurons. Please check the repository structure."

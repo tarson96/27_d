@@ -18,9 +18,9 @@
 import string
 
 # Define the version of the template module.
-__version__ = "2.0.0"
-__minimal_miner_version__ = "1.9.0"
-__minimal_validator_version__ = "2.0.0"
+__version__ = "2.1.0"
+__minimal_miner_version__ = "2.1.0"
+__minimal_validator_version__ = "2.1.0"
 
 version_split = __version__.split(".")
 __version_as_int__ = (100 * int(version_split[0])) + (10 * int(version_split[1])) + (1 * int(version_split[2]))
@@ -82,7 +82,7 @@ TRUSTED_VALIDATORS_HOTKEYS = [
     "5HEo565WAy4Dbq3Sv271SAi7syBSofyfhhwRNjFNSM2gP9M2",  # Foundry
     "5HK5tp6t2S59DywmHRWPBVJeJ86T61KjurYqeooqj8sREpeN",  # Bittensor Guru Podcast
     "5EhvL1FVkQPpMjZX4MAADcW42i3xPSF1KiCpuaxTYVr28sux",  # TAO-Validator.com
-    "5FFApaS75bv5pJHfAp2FVLBj9ZaXuFDjEypsaBNc1wCfe52v",  # RoundTable21
+    "5Cvf4UdxkUsoKaAWyJBjuLykUBkws35hnwWNBB2KHHyHsn27",  # RoundTable21
     "5DvTpiniW9s3APmHRYn8FroUWyfnLtrsid5Mtn5EwMXHN2ed",  # FirstTensor
     "5E4z3h9yVhmQyCFWNbY9BPpwhx4xFiPwq3eeqmBgVF6KULde",  # Tensorplex
     "5F2CsUDVbRbVMXTh9fAzF9GacjVX7UapvRxidrxe7z8BYckQ",  # Rizzo

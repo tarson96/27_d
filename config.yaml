@@ -94,7 +94,7 @@ gpu_performance:
     NVIDIA RTX 6000 Ada Generation: 0.88
     NVIDIA L40: 0.99
     NVIDIA RTX A6000: 0.76
-    NVIDIA RTX 4090: 0.69
+    NVIDIA GeForce RTX 4090: 0.69
     NVIDIA A40: 0.39
     NVIDIA GeForce RTX 3090: 0.43
     NVIDIA L4: 0.43
@@ -167,4 +167,3 @@ server_settings:
   server_ip:      "65.108.33.88"
   server_port:    "8000"
   pull_interval:  60
-
