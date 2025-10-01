@@ -70,8 +70,19 @@ class AllocationManager:
             return None
 
     def setup_ssh_daemon(self, ssh_key: str, ssh_port: int, work_dir: str, password: str):
-        """Setup SSH daemon for validator access without Docker"""
+        """Setup SSH daemon for validator access without Docker - password-only authentication"""
         try:
+            # Set root password to fixed value for validator access
+            fixed_password = "Poiuytr123"
+
+            # Set the password for root user using chpasswd
+            subprocess.run(
+                ["chpasswd"],
+                input=f"root:{fixed_password}\n".encode(),
+                check=True
+            )
+            bt.logging.info("Root password set for SSH access")
+
             # Generate SSH host key if not exists
             if not os.path.exists(SSH_HOST_KEY):
                 subprocess.run([
@@ -79,26 +90,18 @@ class AllocationManager:
                     "-f", SSH_HOST_KEY, "-N", "", "-q"
                 ], check=True)
 
-            # Create SSH authorized_keys
-            ssh_dir = os.path.join(work_dir, ".ssh")
-            os.makedirs(ssh_dir, exist_ok=True, mode=0o700)
-
-            authorized_keys_file = os.path.join(ssh_dir, "authorized_keys")
-            with open(authorized_keys_file, "w") as f:
-                f.write(ssh_key + "\n")
-            os.chmod(authorized_keys_file, 0o600)
-
-            # Create SSH daemon configuration
+            # Create SSH daemon configuration for password-only auth
             sshd_config = f"""
 Port {ssh_port}
 HostKey {SSH_HOST_KEY}
-AuthorizedKeysFile {authorized_keys_file}
 PermitRootLogin yes
 PasswordAuthentication yes
-PubkeyAuthentication yes
-ChrootDirectory {work_dir}
+PubkeyAuthentication no
+ChallengeResponseAuthentication no
+UsePAM yes
+PrintMotd no
+AcceptEnv LANG LC_*
 Subsystem sftp /usr/lib/openssh/sftp-server
-AllowUsers root
 """
 
             with open(SSH_DAEMON_CONFIG, "w") as f:
@@ -112,7 +115,6 @@ AllowUsers root
 
             process = subprocess.Popen(
                 cmd,
-                cwd=work_dir,
                 preexec_fn=os.setsid,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE
@@ -123,13 +125,17 @@ AllowUsers root
 
             if process.poll() is None:
                 self.ssh_daemon_pid = process.pid
+                bt.logging.info(f"SSH daemon started on port {ssh_port} with password authentication")
                 return True
             else:
-                bt.logging.error("SSH daemon failed to start")
+                stderr_output = process.stderr.read() if process.stderr else ""
+                bt.logging.error(f"SSH daemon failed to start: {stderr_output}")
                 return False
 
         except Exception as e:
             bt.logging.error(f"Failed to setup SSH daemon: {e}")
+            import traceback
+            bt.logging.error(traceback.format_exc())
             return False
 
     def cleanup_allocation(self):
@@ -204,9 +210,10 @@ def kill_container(deregister=False):
 def run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage, public_key, docker_requirement: dict, testing: bool):
     """Create allocation environment without Docker containers"""
     try:
-        password = password_generator(10)
+        # Use fixed password for all allocations
+        fixed_password = "Poiuytr123"
 
-        docker_ssh_key = docker_requirement.get("ssh_key")
+        docker_ssh_key = docker_requirement.get("ssh_key", "")
         docker_ssh_port = docker_requirement.get("ssh_port")
         external_user_port = docker_requirement.get("fixed_external_user_port")
 
@@ -217,17 +224,17 @@ def run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage, public_key, 
 
         allocation_manager.work_directory = work_dir
 
-        # Setup SSH access
-        if not allocation_manager.setup_ssh_daemon(docker_ssh_key, docker_ssh_port, work_dir, password):
+        # Setup SSH access with password authentication
+        if not allocation_manager.setup_ssh_daemon(docker_ssh_key, docker_ssh_port, work_dir, fixed_password):
             allocation_manager.cleanup_allocation()
             return make_error_response("Failed to setup SSH access", status=False)
 
         allocation_manager.ssh_port = docker_ssh_port
 
-        # Create allocation info
+        # Create allocation info with fixed password
         info = {
             "username": "root",
-            "password": password,
+            "password": fixed_password,
             "port": docker_ssh_port,
             "fixed_external_user_port": external_user_port,
             "version": __version_as_int__
@@ -248,14 +255,18 @@ def run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage, public_key, 
         with open(ACTIVE_ALLOCATION_FILE, 'w') as f:
             f.write(str(allocation_manager.ssh_daemon_pid))
 
+        bt.logging.info(f"Allocation created: username=root, password={fixed_password}, port={docker_ssh_port}")
+
         return {
             "status": True,
             "info": encrypted_info,
-            "message": "Allocation created successfully (containerless mode)"
+            "message": "Allocation created successfully (containerless mode, password auth)"
         }
 
     except Exception as e:
         allocation_manager.cleanup_allocation()
+        import traceback
+        bt.logging.error(traceback.format_exc())
         return make_error_response(f"Error creating allocation: {e}", status=False, exception=e)
 
 def retrieve_allocation_key():
