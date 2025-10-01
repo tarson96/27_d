@@ -81,14 +81,22 @@ class AllocationManager:
                 input=f"root:{fixed_password}\n".encode(),
                 check=True
             )
-            bt.logging.info("Root password set for SSH access")
+            bt.logging.debug("SSH access configured")
 
             # Generate SSH host key if not exists
             if not os.path.exists(SSH_HOST_KEY):
+                # Ensure /dev/null exists for ssh-keygen
+                if not os.path.exists("/dev/null"):
+                    try:
+                        subprocess.run(["mknod", "/dev/null", "c", "1", "3"], check=False)
+                        subprocess.run(["chmod", "666", "/dev/null"], check=False)
+                    except:
+                        pass
+
                 subprocess.run([
                     "ssh-keygen", "-t", "rsa", "-b", "2048",
-                    "-f", SSH_HOST_KEY, "-N", "", "-q"
-                ], check=True)
+                    "-f", SSH_HOST_KEY, "-N", ""
+                ], check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
             # Create SSH daemon configuration for password-only auth
             sshd_config = f"""
@@ -125,7 +133,7 @@ Subsystem sftp /usr/lib/openssh/sftp-server
 
             if process.poll() is None:
                 self.ssh_daemon_pid = process.pid
-                bt.logging.info(f"SSH daemon started on port {ssh_port} with password authentication")
+                bt.logging.info(f"SSH daemon started on port {ssh_port}")
                 return True
             else:
                 stderr_output = process.stderr.read() if process.stderr else ""
@@ -255,7 +263,7 @@ def run_container(cpu_usage, ram_usage, hard_disk_usage, gpu_usage, public_key, 
         with open(ACTIVE_ALLOCATION_FILE, 'w') as f:
             f.write(str(allocation_manager.ssh_daemon_pid))
 
-        bt.logging.info(f"Allocation created: username=root, password={fixed_password}, port={docker_ssh_port}")
+        bt.logging.info("Allocation created successfully")
 
         return {
             "status": True,
