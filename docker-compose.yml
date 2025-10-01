@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  sn27-miner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: sn27-miner
+    hostname: sn27-miner
+    restart: unless-stopped
+
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - PYTHONPATH=/app
+
+    # Port mapping
+    ports:
+      - "8091:8091"    # Axon port
+      - "4444:4444"    # SSH port for PoG validation
+      - "27015:27015"  # External fixed port
+
+    # Volume mounts
+    volumes:
+      # Wallet persistence
+      - ./wallets:/home/miner/.bittensor/wallets:rw
+      # Logs persistence
+      - ./logs:/app/logs:rw
+      # Allocation workspace
+      - miner-workspace:/tmp/miner_allocations:rw
+      # Environment config
+      - ./.env:/app/.env:ro
+
+    # Network configuration
+    network_mode: host
+
+    # Security context
+    user: "1000:1000"
+
+    # Capabilities needed for SSH daemon and process management
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import bittensor as bt; print('healthy')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+volumes:
+  miner-workspace:
+    driver: local
