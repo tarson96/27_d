@@ -22,7 +22,13 @@ import os
 from io import BytesIO
 
 from compute.utils.exceptions import make_error_response
-from neurons.Miner.container import kill_container, run_container, check_container
+# Use containerless version for Docker-in-Docker environments
+try:
+    from neurons.Miner.container_lite import kill_container, run_container, check_container
+    bt.logging.info("Using containerless allocation mode")
+except ImportError:
+    from neurons.Miner.container import kill_container, run_container, check_container
+    bt.logging.info("Using Docker-based allocation mode")
 from neurons.Miner.schedule import start
 
 
